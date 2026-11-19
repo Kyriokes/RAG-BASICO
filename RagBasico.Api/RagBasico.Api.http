@@ -1,6 +1,6 @@
-# Pedidos de prueba de la fase 6.
+# Pedidos de prueba de la fase 7.
 # En Visual Studio, o en VS Code con la extensión REST Client: "Send Request" arriba de cada pedido.
-@host = http://127.0.0.1:5086
+@host = http://127.0.0.1:5087
 
 ### Información del proyecto. La página de la demo está en la raíz: abrí {{host}} en el navegador
 GET {{host}}/info
