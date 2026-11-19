@@ -1,6 +1,6 @@
 # Responsabilidades
 
-Qué hace cada archivo, clase, función y endpoint de esta versión, y quién lo usa. Esta es la versión de `fase-6-hibrida`.
+Qué hace cada archivo, clase, función y endpoint de esta versión, y quién lo usa. Esta es la versión de `fase-7-qdrant`.
 
 Cómo leerlo:
 
@@ -28,10 +28,13 @@ RAG-BASICO\
 │  ├─ Program.cs                   arranque, servicios y endpoints
 │  ├─ Properties\
 │  │  └─ launchSettings.json       dirección, puerto y forma de arrancar
+│  ├─ Qdrant.cs                    cliente HTTP de Qdrant
 │  ├─ RagBasico.Api.csproj         el proyecto y sus paquetes
 │  ├─ RagBasico.Api.http           pedidos de prueba
 │  ├─ Redactor.cs                  arma la respuesta con Qwen y la registra
 │  ├─ Rrf.cs                       mezcla dos listas de resultados por puesto
+│  ├─ Salud.cs                     revisa que anden todas las piezas
+│  ├─ Sincronizador.cs             mantiene Qdrant igual a SQL Server
 │  ├─ Vectorizador.cs              calcula el vector de cada fragmento
 │  ├─ appsettings.json             configuración
 │  └─ wwwroot\
@@ -47,7 +50,8 @@ RAG-BASICO\
 │  │  ├─ fase-3-medicion.md        el examen y los tiempos
 │  │  ├─ fase-4-carga.md           la carga incremental y el corte por párrafos
 │  │  ├─ fase-5-vectores.md        la búsqueda por significado
-│  │  └─ fase-6-hibrida.md         la híbrida y la página de la demo
+│  │  ├─ fase-6-hibrida.md         la híbrida y la página de la demo
+│  │  └─ fase-7-qdrant.md          el índice de vectores
 │  ├─ responsabilidades.md         este documento
 │  └─ worktrees.md                 una carpeta por fase
 ├─ documentos.csv                  manifiesto de los PDF del examen
@@ -58,7 +62,8 @@ RAG-BASICO\
 │  ├─ controlar-docs.ps1           controla la documentación
 │  ├─ crear-base.ps1               crea la base de la fase
 │  ├─ crear-manifiesto.ps1         arma o verifica el manifiesto
-│  └─ crear-worktrees.ps1          crea una carpeta por fase
+│  ├─ crear-worktrees.ps1          crea una carpeta por fase
+│  └─ iniciar-qdrant.ps1           arranca Qdrant solo en esta PC
 └─ sql\                            scripts de la base
    ├─ 01_base.sql                  tablas y Full-Text
    ├─ 02_consultas.sql             registro de preguntas
@@ -96,22 +101,22 @@ RAG-BASICO\
 
 - **Responsabilidad:** la portada del repo: qué es, qué hace falta para correr esta fase, cómo correrla, cómo recorrer las fases y la tabla de fases.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant.
 
 ## RagBasico.Api\Buscador.cs
 
-- **Responsabilidad:** encontrar los fragmentos que mejor responden una pregunta: por palabras, por significado o con las dos mezcladas.
-- **Contiene:** la clase `Buscador`, con la lista pública `Modos` (`palabras`, `vectores` e `hibrida`) y la constante `ModoPorDefecto` (`hibrida`).
+- **Responsabilidad:** encontrar los fragmentos que mejor responden una pregunta: por palabras, por significado en SQL Server o en Qdrant, o con las dos mezcladas.
+- **Contiene:** la clase `Buscador`, con la lista pública `Modos` (`palabras`, `vectores`, `vectores-qdrant` e `hibrida`), la constante `ModoPorDefecto` (`hibrida`) y la constante `AvisoSinQdrant`, el aviso de la híbrida cuando Qdrant no responde.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-5-vectores, fase-6-hibrida.
+- **Cambió en:** fase-5-vectores, fase-6-hibrida, fase-7-qdrant.
 
 ### Clase Buscador
 
-- **Responsabilidad:** juntar en un solo lugar las formas de buscar: por palabras, con el Full-Text; por vectores, con `VECTOR_DISTANCE`; y la híbrida, que hace las dos y las mezcla.
-- **Recibe en el constructor:** el cliente de `Ollama`, para calcular el vector de la pregunta, y la configuración, de donde lee `ConnectionStrings:Rag` y `Rag:CandidatosHibrida`.
+- **Responsabilidad:** juntar en un solo lugar las formas de buscar: por palabras, con el Full-Text; por vectores en SQL Server, con `VECTOR_DISTANCE`; por vectores en Qdrant, con su índice HNSW; y la híbrida, que mezcla palabras con Qdrant y sigue con SQL si Qdrant no responde.
+- **Recibe en el constructor:** los clientes de `Ollama`, para el vector de la pregunta, y de `Qdrant`; el log, para anotar cuando Qdrant no responde; y la configuración, de donde lee `ConnectionStrings:Rag` y `Rag:CandidatosHibrida`.
 - **La registra:** Program.cs, con `AddScoped`: un objeto nuevo por pedido HTTP.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-5-vectores (recibe el cliente de Ollama y busca por vectores), fase-6-hibrida (la híbrida, que pasa a ser el modo por defecto).
+- **Cambió en:** fase-5-vectores (recibe el cliente de Ollama y busca por vectores), fase-6-hibrida (la híbrida, que pasa a ser el modo por defecto), fase-7-qdrant (Qdrant y el respaldo en SQL).
 
 ### Buscador.ElegirModo(pedido)
 
@@ -125,23 +130,23 @@ RAG-BASICO\
 
 ### Buscador.BuscarAsync(pregunta, modo, topK, ct)
 
-- **Qué hace:** busca con el modo pedido: llama a Buscador.PorPalabrasAsync, a Buscador.PorVectoresAsync o a Buscador.HibridaAsync. Con un modo que no existe lanza un `ArgumentException`, aunque los endpoints ya lo controlaron antes.
+- **Qué hace:** busca con el modo pedido: llama a Buscador.PorPalabrasAsync, Buscador.PorVectoresAsync, Buscador.PorVectoresQdrantAsync o Buscador.HibridaAsync. Con un modo que no existe lanza un `ArgumentException`, aunque los endpoints ya lo controlaron antes.
 - **Recibe:** la pregunta, el modo, cuántos fragmentos devolver y el token de cancelación.
-- **Devuelve:** la lista de `Fragmento`, del más relevante al menos relevante.
+- **Devuelve:** un `ResultadoBusqueda`: los fragmentos, del más relevante al menos relevante, y un aviso, vacío salvo que la híbrida haya seguido sin Qdrant.
 - **Efectos:** los de la búsqueda que usa.
 - **La llaman:** el endpoint `GET /buscar`, Redactor.ResponderAsync y Evaluador.CorrerAsync.
 - **Desde:** fase-5-vectores.
-- **Cambió en:** fase-6-hibrida (el modo `hibrida`).
+- **Cambió en:** fase-6-hibrida (el modo `hibrida`), fase-7-qdrant (el modo `vectores-qdrant`, y devuelve el aviso).
 
 ### Buscador.HibridaAsync(pregunta, topK, ct)
 
-- **Qué hace:** busca por palabras y por vectores al mismo tiempo, pide a cada una los mejores 20 candidatos (`Rag:CandidatosHibrida`) y los mezcla por puesto con Rrf.Mezclar. Las dos búsquedas arrancan juntas y recién después se espera a las dos con `Task.WhenAll`: se tarda lo que la más lenta, no la suma. Cada una abre su propia conexión, así no se pisan.
+- **Qué hace:** busca por palabras y por vectores al mismo tiempo, pide a cada una los mejores 20 candidatos (`Rag:CandidatosHibrida`) y los mezcla por puesto con Rrf.Mezclar. La parte por vectores usa Qdrant y, si Qdrant no responde, los vectores de SQL Server: así la demo sigue andando. Las dos búsquedas arrancan juntas y recién después se espera a las dos con `Task.WhenAll`: se tarda lo que la más lenta, no la suma.
 - **Recibe:** la pregunta, cuántos fragmentos devolver y el token de cancelación.
-- **Devuelve:** la lista de `Fragmento` mezclada, de mayor a menor puntaje RRF.
-- **Efectos:** los de las dos búsquedas: un pedido a Ollama y dos lecturas de SQL Server.
+- **Devuelve:** un `ResultadoBusqueda` con la lista mezclada, de mayor a menor puntaje RRF, y el aviso si Qdrant no respondió.
+- **Efectos:** un pedido a Ollama, uno a Qdrant y dos lecturas de SQL Server.
 - **La llaman:** Buscador.BuscarAsync.
 - **Desde:** fase-6-hibrida.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-7-qdrant (los vectores salen de Qdrant, con respaldo en SQL).
 
 ### Buscador.PorPalabrasAsync(pregunta, topK, ct)
 
@@ -155,12 +160,52 @@ RAG-BASICO\
 
 ### Buscador.PorVectoresAsync(pregunta, topK, ct)
 
-- **Qué hace:** busca los fragmentos más parecidos en significado a la pregunta. Le pide a Ollama el vector de la pregunta, y SQL Server ordena todos los fragmentos que tienen vector por `VECTOR_DISTANCE('cosine', ...)`: 0 es el mismo sentido y 2 el opuesto. Es una búsqueda exacta: recorre todos los vectores, así que tarda más cuantos más fragmentos haya. A diferencia de la búsqueda por palabras, casi nunca vuelve vacía: siempre hay un fragmento más cercano que otro.
+- **Qué hace:** busca los fragmentos más parecidos en significado a la pregunta con los vectores de SQL Server: le pide a Ollama el vector de la pregunta y busca los más cercanos con Buscador.CercanosEnSqlAsync. A diferencia de la búsqueda por palabras, casi nunca vuelve vacía: siempre hay un fragmento más cercano que otro.
 - **Recibe:** la pregunta, cuántos fragmentos devolver y el token de cancelación.
 - **Devuelve:** la lista de `Fragmento`, del más cercano al más lejano. Vacía si la pregunta está vacía o si ningún fragmento tiene vector.
 - **Efectos:** un pedido a Ollama; lee `rag.Fragmento` y `rag.Documento`. No escribe nada.
-- **La llaman:** Buscador.BuscarAsync y Buscador.HibridaAsync.
+- **La llaman:** Buscador.BuscarAsync.
 - **Desde:** fase-5-vectores.
+- **Cambió en:** fase-7-qdrant (la consulta con `VECTOR_DISTANCE` pasa a Buscador.CercanosEnSqlAsync, para que la use también el respaldo de la híbrida).
+
+### Buscador.PorVectoresQdrantAsync(pregunta, topK, ct)
+
+- **Qué hace:** busca los fragmentos más parecidos en significado a la pregunta con el índice HNSW de Qdrant: le pide a Ollama el vector de la pregunta, a Qdrant los números de los fragmentos más cercanos, y a SQL Server sus textos. Si Qdrant no responde, falla: este modo existe para medir Qdrant, y caer en SQL sin avisar mediría otra cosa.
+- **Recibe:** la pregunta, cuántos fragmentos devolver y el token de cancelación.
+- **Devuelve:** la lista de `Fragmento`, del más cercano al más lejano.
+- **Efectos:** un pedido a Ollama y uno a Qdrant; lee `rag.Fragmento` y `rag.Documento`.
+- **La llaman:** Buscador.BuscarAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Buscador.VectoresConRespaldoAsync(pregunta, topK, ct)
+
+- **Qué hace:** la parte por significado de la híbrida. Calcula una sola vez el vector de la pregunta y busca en Qdrant. Si Qdrant no responde, lo anota en el log y busca con los vectores de SQL Server, con el mismo vector. Si se canceló el pedido, no busca en SQL: corta.
+- **Recibe:** la pregunta, cuántos fragmentos devolver y el token de cancelación.
+- **Devuelve:** un `ResultadoBusqueda`: los fragmentos y, si se usó SQL, el aviso `AvisoSinQdrant`.
+- **Efectos:** un pedido a Ollama, uno a Qdrant y una lectura de SQL Server.
+- **La llaman:** Buscador.HibridaAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Buscador.CercanosEnSqlAsync(vector, topK, ct)
+
+- **Qué hace:** busca en SQL Server los fragmentos más cercanos a un vector: los ordena a todos por `VECTOR_DISTANCE('cosine', ...)`, donde 0 es el mismo sentido y 2 el opuesto, y se queda con los primeros. Es una búsqueda exacta: recorre todos los fragmentos que tienen vector, así que tarda más cuantos más haya.
+- **Recibe:** el vector, cuántos fragmentos devolver y el token de cancelación.
+- **Devuelve:** la lista de `Fragmento`, del más cercano al más lejano.
+- **Efectos:** lee `rag.Fragmento` y `rag.Documento`.
+- **La llaman:** Buscador.PorVectoresAsync y Buscador.VectoresConRespaldoAsync.
+- **Desde:** fase-7-qdrant. La consulta es la de Buscador.PorVectoresAsync de la fase 5.
+- **Cambió en:** nada todavía.
+
+### Buscador.LeerFragmentosAsync(ids, ct)
+
+- **Qué hace:** trae de SQL Server los fragmentos de una lista de números, como la que devuelve Qdrant, y los deja en el mismo orden de la lista: SQL no los devuelve en ese orden. Un número que ya no existe en SQL se saltea.
+- **Recibe:** los números de fragmento, del más cercano al más lejano, y el token de cancelación.
+- **Devuelve:** la lista de `Fragmento`, en el orden de los números.
+- **Efectos:** lee `rag.Fragmento` y `rag.Documento`.
+- **La llaman:** Buscador.PorVectoresQdrantAsync y Buscador.VectoresConRespaldoAsync.
+- **Desde:** fase-7-qdrant.
 - **Cambió en:** nada todavía.
 
 ## RagBasico.Api\Chunker.cs
@@ -226,28 +271,30 @@ RAG-BASICO\
 
 - **Responsabilidad:** correr el examen y medir qué tan bien busca el sistema, con números y no con "a mí me anduvo".
 - **Desde:** fase-3-medicion.
-- **Cambió en:** fase-5-vectores.
+- **Cambió en:** fase-5-vectores, fase-7-qdrant.
 
 ### Clase Evaluador
 
 - **Responsabilidad:** leer el examen, pasar cada pregunta por el buscador y las preguntas sin respuesta por el redactor, en cada modo de búsqueda, y resumir los resultados.
-- **Recibe en el constructor:** el `Buscador`, el `Redactor`, la configuración (de donde lee `ConnectionStrings:Rag` y `Rag:ArchivoExamen`) y el entorno, para resolver la ruta del examen contra la carpeta del proyecto.
+- **Recibe en el constructor:** el `Buscador`, el `Redactor`, el `Sincronizador` (para revisar Qdrant antes de medir), la configuración (de donde lee `ConnectionStrings:Rag` y `Rag:ArchivoExamen`) y el entorno, para resolver la ruta del examen contra la carpeta del proyecto.
 - **La registra:** Program.cs, con `AddScoped`.
 - **Desde:** fase-3-medicion.
-- **Cambió en:** fase-5-vectores (corre todos los modos de `Buscador.Modos`).
+- **Cambió en:** fase-5-vectores (corre todos los modos de `Buscador.Modos`), fase-7-qdrant (revisa Qdrant antes de medir).
 
 ### Evaluador.CorrerAsync(ct)
 
 - **Qué hace:** corre el examen completo en cada modo de `Buscador.Modos`.
   1. Avisa si el examen nombra un documento que no está cargado, espera hasta un minuto a que el Full-Text termine de indexar y avisa si hay fragmentos sin vector.
-  2. En cada modo, pasa cada pregunta con respuesta por el buscador y anota en qué puesto apareció un documento correcto.
-  3. En cada modo, pasa cada pregunta sin respuesta por el redactor y cuenta cuántas veces dijo la frase fija. Se mide por modo porque por vectores la búsqueda casi nunca vuelve vacía, y el "no sé" lo decide Qwen.
+  2. Revisa Qdrant con Sincronizador.EstadoAsync: si no está igual a SQL, avisa; si no responde, corta el examen, porque los modos `vectores-qdrant` e `hibrida` lo necesitan.
+  3. En cada modo, pasa cada pregunta con respuesta por el buscador y anota en qué puesto apareció un documento correcto.
+  4. En cada modo, pasa cada pregunta sin respuesta por el redactor y cuenta cuántas veces dijo la frase fija. Se mide por modo porque por vectores la búsqueda casi nunca vuelve vacía, y el "no sé" lo decide Qwen.
+  5. Si en algún modo la híbrida tuvo que seguir sin Qdrant, lo avisa: esa fila no mide Qdrant.
 - **Recibe:** el token de cancelación.
 - **Devuelve:** un `InformeEvaluacion`: una fila por modo, el detalle por pregunta, la lista de fallas y los avisos.
-- **Efectos:** lee SQL Server y llama a Ollama: el vector de cada pregunta en el modo `vectores`, y Qwen para las preguntas sin respuesta, que quedan registradas en `rag.Consulta`.
+- **Efectos:** lee SQL Server y llama a Ollama y a Qdrant: el vector de cada pregunta en los modos por vectores, y Qwen para las preguntas sin respuesta, que quedan registradas en `rag.Consulta`.
 - **La llaman:** el endpoint `POST /evaluar`.
 - **Desde:** fase-3-medicion.
-- **Cambió en:** fase-5-vectores (todos los modos, y las preguntas sin respuesta en cada uno).
+- **Cambió en:** fase-5-vectores (todos los modos, y las preguntas sin respuesta en cada uno), fase-7-qdrant (revisa Qdrant antes de medir y avisa si la híbrida siguió sin Qdrant).
 
 ### Evaluador.Puntuar(modo, detalle)
 
@@ -314,15 +361,15 @@ RAG-BASICO\
 - **Responsabilidad:** mantener la base igual a la carpeta de PDF: cargar los nuevos y los cambiados, no tocar los que siguen igual y borrar los que ya no están.
 - **Contiene:** la clase `Indexador` y su constante privada `PalabrasPorPaginaMinimas` (40): el promedio de palabras por página por debajo del cual un PDF se toma como escaneado.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-4-carga, fase-5-vectores.
+- **Cambió en:** fase-4-carga, fase-5-vectores, fase-7-qdrant.
 
 ### Clase Indexador
 
 - **Responsabilidad:** el camino de un PDF hasta la base, y decidir cuáles hacen ese camino.
-- **Recibe en el constructor:** la configuración, de donde lee `ConnectionStrings:Rag`, `Rag:CarpetaDocumentos`, `Rag:PalabrasPorFragmento` y `Rag:Solapamiento`.
+- **Recibe en el constructor:** el `Sincronizador`, para poner Qdrant al día después de cargar, y la configuración, de donde lee `ConnectionStrings:Rag`, `Rag:CarpetaDocumentos`, `Rag:PalabrasPorFragmento` y `Rag:Solapamiento`.
 - **La registra:** Program.cs, con `AddScoped`.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-4-carga (carga incremental).
+- **Cambió en:** fase-4-carga (carga incremental), fase-7-qdrant (recibe el sincronizador).
 
 ### Indexador.IndexarCarpetaAsync(ct)
 
@@ -332,12 +379,13 @@ RAG-BASICO\
   3. Borra los documentos que ya no están en la carpeta. Si la carpeta no tiene ningún PDF, no borra nada y lo avisa.
   4. Carga los nuevos y los cambiados. Los que siguen igual no se vuelven a leer.
   5. Si un PDF falla, lo anota y sigue con el siguiente.
+  6. Pone Qdrant al día con Sincronizador.PonerAlDiaAsync: los fragmentos borrados en SQL también se borran de Qdrant. Los nuevos todavía no tienen vector: los sube `/vectores`.
 - **Recibe:** el token de cancelación.
 - **Devuelve:** un `InformeIndexado`: cuántos PDF se cargaron, cuántos quedaron igual y cuántos se borraron, cuántos fragmentos se guardaron, el tiempo como horas:minutos:segundos y el detalle. El detalle tiene una línea por cada PDF cargado, borrado, sin texto o con error; si no hubo nada que hacer, una sola línea `SIN CAMBIOS`.
-- **Efectos:** lee los PDF de la carpeta y `rag.Documento`; borra filas de `rag.Documento` (y en cascada de `rag.Fragmento`) e inserta las nuevas.
+- **Efectos:** lee los PDF de la carpeta y `rag.Documento`; borra filas de `rag.Documento` (y en cascada de `rag.Fragmento`) e inserta las nuevas; borra de Qdrant los puntos de los fragmentos que ya no están.
 - **La llaman:** el endpoint `POST /indexar`.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-4-carga (carga solo lo nuevo o cambiado y borra lo que ya no está, en lugar de recargar todo).
+- **Cambió en:** fase-4-carga (carga solo lo nuevo o cambiado y borra lo que ya no está, en lugar de recargar todo), fase-7-qdrant (pone Qdrant al día).
 
 ### Indexador.CalcularHuella(ruta, parametros)
 
@@ -436,12 +484,12 @@ RAG-BASICO\
 
 - **Responsabilidad:** los records que viajan entre las piezas: lo que llega en un pedido y lo que devuelve cada servicio. Un record es una clase chica de solo datos, que se compara por su contenido.
 - **Desde:** fase-1-ollama.
-- **Cambió en:** fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores.
+- **Cambió en:** fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-7-qdrant.
 
 | Record | Campo | Tipo | Para qué |
 |---|---|---|---|
 | `PedidoPregunta` | `Pregunta` | `string` | La pregunta que llega en el cuerpo de `POST /preguntar` |
-| `PedidoPregunta` | `Modo` | `string?` | El modo de búsqueda: `palabras`, `vectores` o `hibrida`. Si falta, `hibrida` |
+| `PedidoPregunta` | `Modo` | `string?` | El modo de búsqueda: `palabras`, `vectores`, `vectores-qdrant` o `hibrida`. Si falta, `hibrida` |
 | `RespuestaModelo` | `Texto` | `string` | Lo que escribió el modelo |
 | `RespuestaModelo` | `MsCarga`, `MsLectura`, `MsEscritura` | `int` | Lo que tardó Ollama en cargar el modelo (0 si ya estaba), en leer el pedido y en escribir la respuesta |
 | `RespuestaModelo` | `TokensPregunta`, `TokensRespuesta` | `int` | Cuántos tokens leyó y cuántos escribió |
@@ -452,7 +500,7 @@ RAG-BASICO\
 | `InformeIndexado` | `SinCambios`, `Borrados` | `int` | Cuántos PDF quedaron igual, y cuántos documentos se borraron porque ya no están en la carpeta |
 | `InformeIndexado` | `Fragmentos` | `int` | Cuántos fragmentos se guardaron en esta carga |
 | `InformeIndexado` | `Tiempo` | `string` | Lo que tardó, como horas:minutos:segundos |
-| `InformeIndexado` | `Detalle` | `List<string>` | Una línea por PDF cargado (`NUEVO` o `CAMBIÓ`, con `TEXTO DUDOSO` si corresponde), borrado (`BORRADO`), sin texto (`SIN TEXTO`) o con error (`ERROR`); o una sola línea `SIN CAMBIOS` |
+| `InformeIndexado` | `Detalle` | `List<string>` | Una línea por PDF cargado (`NUEVO` o `CAMBIÓ`, con `TEXTO DUDOSO` si corresponde), borrado (`BORRADO`), sin texto (`SIN TEXTO`) o con error (`ERROR`), o una sola línea `SIN CAMBIOS`; y al final la línea de Qdrant (`QDRANT:` o `AVISO:`) |
 | `ArchivoEnCarpeta` | `Archivo`, `Ruta` | `string` | El nombre del PDF y su ruta completa |
 | `ArchivoEnCarpeta` | `Huella` | `byte[]?` | La huella de carga; `null` si el archivo no se pudo leer |
 | `DocumentoCargado` | `DocumentoId` | `int` | El número del documento en `rag.Documento` |
@@ -464,13 +512,35 @@ RAG-BASICO\
 | `InformeVectores` | `Pendientes` | `int` | Cuántos fragmentos quedan sin vector al terminar |
 | `InformeVectores` | `FragmentosPorSegundo` | `double` | La velocidad, que es el dato para dimensionar el servidor |
 | `InformeVectores` | `Tiempo` | `string` | Lo que tardó, como horas:minutos:segundos |
-| `InformeVectores` | `Detalle` | `List<string>` | Una línea por fragmento que falló, o una sola línea `SIN CAMBIOS` |
+| `InformeVectores` | `Detalle` | `List<string>` | Una línea por fragmento que falló, o una sola línea `SIN CAMBIOS`; y al final la línea de Qdrant |
 | `Fuente` | `Numero` | `int` | El número con que la cita el modelo: `[1]`, `[2]`... |
 | `Fuente` | `Archivo`, `FragmentoId` | `string`, `int` | El PDF y el fragmento exacto |
 | `RespuestaRag` | `Texto` | `string` | La respuesta, o la frase de "no encontré" |
 | `RespuestaRag` | `Fuentes` | `List<Fuente>` | Las fuentes, en el orden en que se le pasaron al modelo. Vacía si no encontró |
 | `RespuestaRag` | `MsBusqueda`, `MsModelo` | `int` | Lo que tardó la búsqueda y lo que tardó el modelo, medido desde la API |
 | `RespuestaRag` | `MsCarga`, `MsLectura`, `MsEscritura` | `int` | Los tiempos de Ollama |
+| `RespuestaRag` | `Aviso` | `string` | Vacío, salvo que la híbrida haya seguido sin Qdrant: entonces lo dice |
+| `ResultadoBusqueda` | `Fragmentos` | `List<Fragmento>` | Los fragmentos encontrados, del más relevante al menos relevante |
+| `ResultadoBusqueda` | `Aviso` | `string` | Vacío, salvo que la híbrida haya seguido sin Qdrant |
+| `PuntoQdrant` | `Id` | `int` | El id del punto en Qdrant, que es el número de fragmento de SQL |
+| `PuntoQdrant` | `Vector` | `float[]` | El vector, de 1024 números |
+| `PuntoQdrant` | `DocumentoId` | `int` | El número de documento, que se guarda como dato extra (payload) |
+| `InfoColeccion` | `Estado` | `string` | El color que informa Qdrant: `green` si está todo listo, `yellow` si está optimizando |
+| `InfoColeccion` | `Puntos`, `VectoresIndexados` | `int` | Cuántos puntos tiene la colección, y cuántos vectores están en el índice HNSW |
+| `ComparacionIds` | `Faltan`, `Sobran` | `List<int>` | Los números de fragmento que están en SQL y no en Qdrant, y los que están en Qdrant y no en SQL |
+| `EstadoQdrant` | `Iguales` | `bool` | Si SQL y Qdrant tienen los mismos números de fragmento y la muestra de vectores coincide |
+| `EstadoQdrant` | `Coleccion`, `EstadoColeccion` | `string` | El nombre de la colección y su color en Qdrant |
+| `EstadoQdrant` | `ConVectorEnSql`, `PuntosEnQdrant`, `VectoresIndexados` | `int` | Cuántos fragmentos con vector hay en SQL, cuántos puntos en Qdrant y cuántos en el índice HNSW |
+| `EstadoQdrant` | `CantidadFaltan`, `CantidadSobran` | `int` | Cuántos números faltan en Qdrant y cuántos sobran |
+| `EstadoQdrant` | `Faltan`, `Sobran` | `List<int>` | Los primeros 20 de cada lista, para buscarlos en SSMS |
+| `EstadoQdrant` | `MuestraCoincide` | `bool?` | Si los vectores de la muestra son los mismos en los dos lados; `null` si no hubo nada que comparar |
+| `EstadoQdrant` | `Mensaje` | `string` | Si están iguales y, si no, qué hacer |
+| `InformeQdrant` | `Subidos`, `Borrados` | `int` | Cuántos puntos se subieron y cuántos tenía la colección antes de borrarla |
+| `InformeQdrant` | `Tiempo` | `string` | Lo que tardó, como horas:minutos:segundos |
+| `InformeQdrant` | `Detalle` | `List<string>` | Qué se hizo, paso por paso |
+| `Chequeo` | `Nombre`, `Estado`, `Detalle` | `string` | Qué se revisó, cómo dio (`ok`, `aviso` o `error`) y el detalle |
+| `InformeSalud` | `Estado` | `string` | El estado general: `error` si algún chequeo dio error, `aviso` si alguno dio aviso, `ok` si no |
+| `InformeSalud` | `Chequeos` | `List<Chequeo>` | Los cinco chequeos |
 | `PreguntaExamen` | `Pregunta` | `string` | La pregunta del examen |
 | `PreguntaExamen` | `Documentos` | `List<string>` | Los PDF que la responden. Vacía si es una pregunta sin respuesta |
 | `DetallePregunta` | `Pregunta`, `Modo` | `string` | La pregunta y el modo de búsqueda |
@@ -482,14 +552,14 @@ RAG-BASICO\
 | `ResultadoModo` | `SinRespuestaCorrectas`, `SinRespuestaTotal` | `int` | De las preguntas sin respuesta, cuántas recibieron la frase fija con este modo |
 | `InformeEvaluacion` | `Resultados` | `List<ResultadoModo>` | La tabla, con una fila por modo |
 | `InformeEvaluacion` | `Detalle` | `List<DetallePregunta>` | El puesto de cada pregunta en cada modo |
-| `InformeEvaluacion` | `Fallas`, `Avisos` | `List<string>` | Las preguntas que fallaron, y los avisos (examen vacío, documentos no cargados, Full-Text pendiente, fragmentos sin vector) |
+| `InformeEvaluacion` | `Fallas`, `Avisos` | `List<string>` | Las preguntas que fallaron, y los avisos (examen vacío, documentos no cargados, Full-Text pendiente, fragmentos sin vector, Qdrant distinto de SQL o apagado) |
 
 ## RagBasico.Api\Ollama.cs
 
 - **Responsabilidad:** hablar con Ollama por HTTP. Manda el mismo JSON que se mandaría con Postman y devuelve lo que contesta el modelo.
-- **Contiene:** la clase `Ollama`, con la constante pública `Dimension` (1024, el tamaño de cada vector), y tres records privados para leer las respuestas: `RespuestaChat` (el mensaje y los tiempos de `/api/chat`), `MensajeChat` (el texto que escribió el modelo) y `RespuestaEmbed` (los vectores de `/api/embed`).
+- **Contiene:** la clase `Ollama`, con la constante pública `Dimension` (1024, el tamaño de cada vector), y cinco records privados para leer las respuestas: `RespuestaChat` (el mensaje y los tiempos de `/api/chat`), `MensajeChat` (el texto que escribió el modelo), `RespuestaEmbed` (los vectores de `/api/embed`), `RespuestaModelos` y `ModeloInstalado` (los modelos de `/api/tags`).
 - **Desde:** fase-1-ollama.
-- **Cambió en:** fase-5-vectores.
+- **Cambió en:** fase-5-vectores, fase-7-qdrant.
 
 ### Clase Ollama
 
@@ -497,7 +567,7 @@ RAG-BASICO\
 - **Recibe en el constructor:** el `HttpClient` que arma Program.cs, con la dirección y el tiempo de espera de la configuración, y la configuración, de donde lee `Ollama:ModeloChat`, `Ollama:ModeloEmbeddings`, `Ollama:InstruccionPregunta` y `Ollama:MantenerCargado`.
 - **La registra:** Program.cs, con `AddHttpClient<Ollama>`, que crea un cliente tipado nuevo en cada pedido.
 - **Desde:** fase-1-ollama.
-- **Cambió en:** fase-5-vectores (los embeddings).
+- **Cambió en:** fase-5-vectores (los embeddings), fase-7-qdrant (la lista de modelos y el calentamiento).
 
 ### Ollama.ChatAsync(sistema, usuario, ct)
 
@@ -505,7 +575,7 @@ RAG-BASICO\
 - **Recibe:** el mensaje de sistema (las reglas), el mensaje del usuario y el token de cancelación del pedido.
 - **Devuelve:** un `RespuestaModelo` con el texto y los tiempos que informa Ollama: carga del modelo, lectura de la pregunta y escritura de la respuesta, en milisegundos, y la cantidad de tokens leídos y escritos.
 - **Efectos:** un `POST /api/chat` a Ollama.
-- **La llaman:** Redactor.ResponderAsync.
+- **La llaman:** Redactor.ResponderAsync y Ollama.CalentarAsync.
 - **Desde:** fase-1-ollama.
 - **Cambió en:** nada todavía.
 
@@ -515,7 +585,7 @@ RAG-BASICO\
 - **Recibe:** la lista de textos y el token de cancelación.
 - **Devuelve:** un vector (`float[]` de 1024 números) por texto, en el mismo orden.
 - **Efectos:** un `POST /api/embed` a Ollama.
-- **La llaman:** Ollama.EmbeddingPreguntaAsync y Vectorizador.CalcularYGuardarAsync.
+- **La llaman:** Ollama.EmbeddingPreguntaAsync, Ollama.CalentarAsync, Vectorizador.CalcularYGuardarAsync y Salud.RevisarDimensionAsync.
 - **Desde:** fase-5-vectores.
 - **Cambió en:** nada todavía.
 
@@ -525,8 +595,28 @@ RAG-BASICO\
 - **Recibe:** la pregunta y el token de cancelación.
 - **Devuelve:** el vector de la pregunta.
 - **Efectos:** un `POST /api/embed` a Ollama, por medio de Ollama.EmbeddingsAsync.
-- **La llaman:** Buscador.PorVectoresAsync.
+- **La llaman:** Buscador.PorVectoresAsync, Buscador.PorVectoresQdrantAsync y Buscador.VectoresConRespaldoAsync.
 - **Desde:** fase-5-vectores.
+- **Cambió en:** nada todavía.
+
+### Ollama.ListarModelosAsync(ct)
+
+- **Qué hace:** pide `GET /api/tags` y devuelve los nombres de los modelos que tiene instalados Ollama.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** la lista de nombres, como `qwen3.5:4b`.
+- **Efectos:** un pedido a Ollama.
+- **La llaman:** Salud.RevisarModelosAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Ollama.CalentarAsync(ct)
+
+- **Qué hace:** carga los dos modelos en la memoria de la placa de video con un pedido mínimo a cada uno: el vector de "hola" y una respuesta de una palabra. Ollama los deja cargados el tiempo de `Ollama:MantenerCargado`, así la primera pregunta de la demo no espera la carga, que puede llevar 30 segundos.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** nada.
+- **Efectos:** un `POST /api/embed` y un `POST /api/chat` a Ollama.
+- **La llaman:** Program.cs, en segundo plano, cuando la API termina de arrancar.
+- **Desde:** fase-7-qdrant.
 - **Cambió en:** nada todavía.
 
 ### Ollama.VerificarAsync(respuesta, ct)
@@ -535,7 +625,7 @@ RAG-BASICO\
 - **Recibe:** la respuesta HTTP de Ollama y el token de cancelación.
 - **Devuelve:** nada. Si la respuesta es un error, lanza `InvalidOperationException`.
 - **Efectos:** lee el cuerpo de la respuesta cuando es un error.
-- **La llaman:** Ollama.ChatAsync y Ollama.EmbeddingsAsync.
+- **La llaman:** Ollama.ChatAsync, Ollama.EmbeddingsAsync y Ollama.ListarModelosAsync.
 - **Desde:** fase-1-ollama.
 - **Cambió en:** nada todavía.
 
@@ -578,16 +668,17 @@ RAG-BASICO\
 
 ## RagBasico.Api\Program.cs
 
-- **Responsabilidad:** el punto de entrada de la API: arma la aplicación, registra los servicios, sirve la página de la demo, declara los endpoints y la deja escuchando.
-- **Contiene:** instrucciones de nivel superior, sin clase: el compilador arma solo el método `Main`. Se lee en seis bloques:
+- **Responsabilidad:** el punto de entrada de la API: arma la aplicación, registra los servicios, carga los modelos, sirve la página de la demo, declara los endpoints y la deja escuchando.
+- **Contiene:** instrucciones de nivel superior, sin clase: el compilador arma solo el método `Main`. Se lee en siete bloques:
   - **Armado:** `WebApplication.CreateBuilder(args)` lee `appsettings.json`, las variables de entorno y los argumentos.
-  - **Servicios:** `AddHttpClient<Ollama>` registra el cliente de Ollama con `Ollama:Url` y `Ollama:SegundosDeEspera`. `AddScoped` registra el `Indexador`, el `Vectorizador`, el `Buscador`, el `Redactor` y el `Evaluador`: un objeto nuevo de cada uno por pedido. Cuando un endpoint o un constructor pide uno, ASP.NET Core se lo crea: eso es la inyección de dependencias.
+  - **Servicios:** `AddHttpClient<Ollama>` registra el cliente de Ollama con `Ollama:Url` y `Ollama:SegundosDeEspera`, y `AddHttpClient<Qdrant>` el de Qdrant con `Qdrant:Url` y `Qdrant:SegundosDeEspera`, que es corto: si Qdrant no responde, la híbrida sigue con SQL. `AddScoped` registra el `Sincronizador`, el `Indexador`, el `Vectorizador`, el `Buscador`, el `Redactor`, el `Evaluador` y la `Salud`: un objeto nuevo de cada uno por pedido. Cuando un endpoint o un constructor pide uno, ASP.NET Core se lo crea: eso es la inyección de dependencias.
   - **Control al arrancar:** muestra en el log la carpeta de PDF que va a usar, o avisa que no existe y qué variable de entorno crear.
+  - **Calentamiento:** cuando la API ya está escuchando (`ApplicationStarted`), carga los dos modelos en Ollama en segundo plano con Ollama.CalentarAsync, así la primera pregunta de la demo no tarda 30 segundos. `Task.Run` lo corre sin hacer esperar el arranque; si falla, queda en el log.
   - **Página:** `UseDefaultFiles` hace que la raíz, `/`, devuelva `wwwroot\index.html`, y `UseStaticFiles` sirve los archivos de `wwwroot`. Por eso la información del proyecto está en `/info`.
   - **Endpoints:** cada `app.MapGet(...)` o `app.MapPost(...)` asocia una ruta con la función que la atiende. `GET /buscar` y `POST /preguntar` controlan el modo con Buscador.ElegirModo y, si no existe, devuelven `Results.BadRequest`: un error 400 con el motivo.
   - **Arranque:** `app.Run()` deja la API escuchando en la dirección de `launchSettings.json` hasta que se la frena con Ctrl+C.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-5-vectores, fase-6-hibrida.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-5-vectores, fase-6-hibrida, fase-7-qdrant.
 
 ### GET /info
 
@@ -600,42 +691,66 @@ RAG-BASICO\
 ### POST /indexar
 
 - **Recibe:** nada. Los PDF salen de la carpeta `Rag:CarpetaDocumentos`.
-- **Devuelve:** el `InformeIndexado` de la carga: cuántos PDF se cargaron, cuántos quedaron igual y cuántos se borraron, los fragmentos, el tiempo y el detalle. La segunda vez seguida dice `SIN CAMBIOS`.
+- **Devuelve:** el `InformeIndexado` de la carga: cuántos PDF se cargaron, cuántos quedaron igual y cuántos se borraron, los fragmentos, el tiempo y el detalle, con la línea de Qdrant al final. La segunda vez seguida dice `SIN CAMBIOS`.
 - **La atiende:** una función de `Program.cs` que llama a Indexador.IndexarCarpetaAsync.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-4-carga (pone la base al día con la carpeta en lugar de recargar todo).
+- **Cambió en:** fase-4-carga (pone la base al día con la carpeta en lugar de recargar todo), fase-7-qdrant (también borra de Qdrant lo que ya no está).
 
 ### POST /vectores
 
 - **Recibe:** nada.
-- **Devuelve:** el `InformeVectores`: cuántos vectores se calcularon, cuántos fallaron, cuántos fragmentos quedan sin vector, cuántos fragmentos por segundo, el tiempo y el detalle. La segunda vez seguida dice `SIN CAMBIOS`.
+- **Devuelve:** el `InformeVectores`: cuántos vectores se calcularon, cuántos fallaron, cuántos fragmentos quedan sin vector, cuántos fragmentos por segundo, el tiempo y el detalle, con la línea de Qdrant al final. La segunda vez seguida dice `SIN CAMBIOS`.
 - **La atiende:** una función de `Program.cs` que llama a Vectorizador.CalcularPendientesAsync.
 - **Desde:** fase-5-vectores.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-7-qdrant (sube los vectores nuevos a Qdrant, y los que le faltaban si estuvo apagado).
 
 ### GET /buscar
 
-- **Recibe:** la pregunta en el parámetro `q` de la dirección y, si se quiere, el modo en `modo`: `palabras`, `vectores` o `hibrida`, que es el modo por defecto. Por ejemplo: `/buscar?q=requisitos reintegro&modo=palabras`.
-- **Devuelve:** la lista de fragmentos encontrados con ese modo, hasta `Rag:TopK`. Si falta `q`, o si el modo no existe, un error 400.
+- **Recibe:** la pregunta en el parámetro `q` de la dirección y, si se quiere, el modo en `modo`: `palabras`, `vectores` (en SQL), `vectores-qdrant` o `hibrida`, que es el modo por defecto. Por ejemplo: `/buscar?q=requisitos reintegro&modo=vectores-qdrant`.
+- **Devuelve:** un `ResultadoBusqueda`: los fragmentos encontrados con ese modo, hasta `Rag:TopK`, y el aviso si la híbrida siguió sin Qdrant. Si falta `q`, o si el modo no existe, un error 400. Con `vectores-qdrant` y Qdrant apagado, un error 500.
 - **La atiende:** una función de `Program.cs` que controla el modo con Buscador.ElegirModo y llama a Buscador.BuscarAsync.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-5-vectores (el parámetro `modo`), fase-6-hibrida (la híbrida, que pasa a ser el modo por defecto).
+- **Cambió en:** fase-5-vectores (el parámetro `modo`), fase-6-hibrida (la híbrida, que pasa a ser el modo por defecto), fase-7-qdrant (el modo `vectores-qdrant`, y devuelve un objeto con el aviso en lugar de la lista sola).
 
 ### POST /preguntar
 
 - **Recibe:** un JSON con la pregunta y, si se quiere, el modo: `{ "pregunta": "...", "modo": "palabras" }`, que ASP.NET Core convierte en un `PedidoPregunta`. Sin modo, usa la híbrida.
-- **Devuelve:** el `RespuestaRag`: la respuesta de Qwen con citas `[n]`, las fuentes y los tiempos. Si los documentos no alcanzan, la frase "No encontré esa información en los documentos." sin fuentes. Si el modo no existe, un error 400 con el motivo.
+- **Devuelve:** el `RespuestaRag`: la respuesta de Qwen con citas `[n]`, las fuentes, los tiempos y el aviso si la híbrida siguió sin Qdrant. Si los documentos no alcanzan, la frase "No encontré esa información en los documentos." sin fuentes. Si el modo no existe, un error 400 con el motivo.
 - **La atiende:** una función de `Program.cs` que controla el modo con Buscador.ElegirModo y llama a Redactor.ResponderAsync.
 - **Desde:** fase-1-ollama.
-- **Cambió en:** fase-2-rag-minimo (responde con los documentos, no con lo que sabe Qwen), fase-5-vectores (el modo), fase-6-hibrida (la híbrida por defecto).
+- **Cambió en:** fase-2-rag-minimo (responde con los documentos, no con lo que sabe Qwen), fase-5-vectores (el modo), fase-6-hibrida (la híbrida por defecto), fase-7-qdrant (el aviso).
 
 ### POST /evaluar
 
 - **Recibe:** nada. El examen sale de `Rag:ArchivoExamen`.
-- **Devuelve:** el `InformeEvaluacion`: una fila por modo con "1er lugar", "entre los 5", ms promedio y las preguntas sin respuesta bien contestadas; el detalle por pregunta, las fallas y los avisos.
+- **Devuelve:** el `InformeEvaluacion`: una fila por modo con "1er lugar", "entre los 5", ms promedio y las preguntas sin respuesta bien contestadas; el detalle por pregunta, las fallas y los avisos. Si Qdrant no responde, solo el aviso: el examen se corta.
 - **La atiende:** una función de `Program.cs` que llama a Evaluador.CorrerAsync.
 - **Desde:** fase-3-medicion.
-- **Cambió en:** fase-5-vectores (compara todos los modos de `Buscador.Modos`).
+- **Cambió en:** fase-5-vectores (compara todos los modos de `Buscador.Modos`), fase-7-qdrant (revisa Qdrant antes de medir).
+
+### GET /salud
+
+- **Recibe:** nada.
+- **Devuelve:** el `InformeSalud`: el estado general y cinco chequeos (SQL Server, Full-Text, modelos de Ollama, dimensión de los vectores y Qdrant). Con estado `error`, el código HTTP es 503; con `aviso` u `ok`, 200, porque la demo anda.
+- **La atiende:** una función de `Program.cs` que llama a Salud.RevisarAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### GET /qdrant/estado
+
+- **Recibe:** nada.
+- **Devuelve:** el `EstadoQdrant`: si SQL y Qdrant tienen los mismos números de fragmento, cuántos faltan y sobran, la muestra de vectores, cuántos vectores están en el índice HNSW y qué hacer.
+- **La atiende:** una función de `Program.cs` que llama a Sincronizador.EstadoAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### POST /qdrant/reconstruir
+
+- **Recibe:** nada.
+- **Devuelve:** el `InformeQdrant`: cuántos puntos se subieron, cuántos había, el tiempo y el detalle.
+- **La atiende:** una función de `Program.cs` que llama a Sincronizador.ReconstruirAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
 
 ## RagBasico.Api\Properties\launchSettings.json
 
@@ -643,7 +758,152 @@ RAG-BASICO\
 - **Contiene:** un solo perfil, `http`: escucha en `http://127.0.0.1:508N`, donde N es el número de la fase, con el entorno `Development`, y abre el navegador. Así dos fases pueden correr a la vez. El template traía también un perfil `https` con puertos al azar, que se sacó porque chocaría entre fases.
 - **Por qué 127.0.0.1:** es la misma dirección que usan Ollama y Qdrant, que escuchan solo en IPv4, así todo el proyecto usa una sola. La consecuencia es que la API también escucha solo en IPv4: se la llama con `http://127.0.0.1:508N`, como hacen el archivo `.http` y el navegador que abre el perfil. Con `localhost`, los clientes de .NET (PowerShell, `WebClient`, `HttpClient`) prueban primero IPv6 y tardan unos 2 segundos más en conectarse.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant.
+
+## RagBasico.Api\Qdrant.cs
+
+- **Responsabilidad:** hablar con Qdrant por HTTP, con JSON armado a mano, como con Ollama: sin el SDK de Qdrant, para que se vea qué se manda.
+- **Contiene:** la clase `Qdrant` y su opción privada `SinNulos`, que manda los pedidos sin los campos en `null`.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Clase Qdrant
+
+- **Responsabilidad:** ser el único lugar del código que conoce la API de Qdrant. Las respuestas se leen con `JsonDocument`, que recorre el JSON sin declarar una clase por cada respuesta.
+- **Recibe en el constructor:** el `HttpClient` que arma Program.cs, con `Qdrant:Url` y `Qdrant:SegundosDeEspera`, y la configuración, de donde lee `Qdrant:Coleccion`. Tiene la propiedad `Coleccion`, con ese nombre.
+- **La registra:** Program.cs, con `AddHttpClient<Qdrant>`.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Qdrant.LeerVersionAsync(ct)
+
+- **Qué hace:** pide `GET /` y lee la versión de Qdrant. Sirve para saber si está andando.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** la versión, por ejemplo `1.20.2`.
+- **Efectos:** un pedido a Qdrant.
+- **La llaman:** Salud.RevisarQdrantAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Qdrant.ExisteColeccionAsync(ct)
+
+- **Qué hace:** pregunta si existe la colección, con `GET /collections/<colección>/exists`.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** `true` si existe.
+- **Efectos:** un pedido a Qdrant.
+- **La llaman:** Sincronizador.EstadoAsync, Sincronizador.PonerAlDiaAsync, Sincronizador.ReconstruirAsync y Salud.RevisarQdrantAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Qdrant.CrearColeccionAsync(ct)
+
+- **Qué hace:** crea la colección con `PUT /collections/<colección>`: vectores de 1024 números comparados por coseno, y los dos umbrales bajos. `indexing_threshold` en 10 KB hace que el índice HNSW se arme enseguida, y `full_scan_threshold` en 10 KB hace que la búsqueda lo use. Los dos se miden en kilobytes y cada vector ocupa 4 KB: con los valores por defecto, unos 2.500 vectores, Qdrant buscaría recorriendo todos los vectores, igual que SQL.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** nada.
+- **Efectos:** crea la colección en Qdrant.
+- **La llaman:** Sincronizador.PonerAlDiaAsync y Sincronizador.ReconstruirAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Qdrant.BorrarColeccionAsync(ct)
+
+- **Qué hace:** borra la colección con todos sus puntos, con `DELETE /collections/<colección>`.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** lo que contestó Qdrant: `true` si dice que la borró. No alcanza con creerle: Sincronizador.ReconstruirAsync comprueba después que ya no exista.
+- **Efectos:** borra la colección en Qdrant.
+- **La llaman:** Sincronizador.ReconstruirAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Qdrant.LeerInfoAsync(ct)
+
+- **Qué hace:** lee el estado de la colección con `GET /collections/<colección>`: el color (`green` si está todo listo, `yellow` si está optimizando), cuántos puntos tiene (`points_count`) y cuántos vectores están en el índice HNSW (`indexed_vectors_count`).
+- **Recibe:** el token de cancelación.
+- **Devuelve:** un `InfoColeccion`.
+- **Efectos:** un pedido a Qdrant.
+- **La llaman:** Sincronizador.EstadoAsync, Sincronizador.ReconstruirAsync y Salud.RevisarQdrantAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Qdrant.SubirAsync(puntos, ct)
+
+- **Qué hace:** sube puntos con `PUT /collections/<colección>/points?wait=true`: el número de fragmento como id, el vector, y el número de documento como dato extra (payload), para poder ver de qué documento es cada punto. Si el id ya existe, lo pisa. Con `wait=true`, Qdrant contesta cuando los puntos ya están guardados.
+- **Recibe:** la lista de `PuntoQdrant` y el token de cancelación.
+- **Devuelve:** nada.
+- **Efectos:** escribe en la colección.
+- **La llaman:** Sincronizador.SubirAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Qdrant.BorrarPuntosAsync(ids, ct)
+
+- **Qué hace:** borra puntos por su id, que es el número de fragmento, con `POST /collections/<colección>/points/delete?wait=true`.
+- **Recibe:** los ids y el token de cancelación.
+- **Devuelve:** nada.
+- **Efectos:** borra puntos de la colección.
+- **La llaman:** Sincronizador.PonerAlDiaAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Qdrant.ListarIdsAsync(ct)
+
+- **Qué hace:** lista los ids de todos los puntos recorriendo la colección de a 1.000 con `POST /collections/<colección>/points/scroll`, sin pedir vectores ni payload. Cada respuesta dice desde qué id sigue la página siguiente (`next_page_offset`), o `null` cuando no hay más.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** la lista de ids, en orden.
+- **Efectos:** un pedido a Qdrant por cada 1.000 puntos.
+- **La llaman:** Sincronizador.EstadoAsync y Sincronizador.PonerAlDiaAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Qdrant.LeerVectorAsync(id, ct)
+
+- **Qué hace:** lee el vector guardado de un punto con `POST /collections/<colección>/points`. Qdrant lo devuelve normalizado, porque la colección compara por coseno.
+- **Recibe:** el id y el token de cancelación.
+- **Devuelve:** el vector, o `null` si el punto no existe.
+- **Efectos:** un pedido a Qdrant.
+- **La llaman:** Sincronizador.MuestraCoincideAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Qdrant.BuscarAsync(vector, topK, ct)
+
+- **Qué hace:** busca los puntos más cercanos a un vector con el índice HNSW, con `POST /collections/<colección>/points/query`.
+- **Recibe:** el vector de la pregunta, cuántos devolver y el token de cancelación.
+- **Devuelve:** los ids de los puntos, del más cercano al más lejano.
+- **Efectos:** un pedido a Qdrant.
+- **La llaman:** Buscador.PorVectoresQdrantAsync y Buscador.VectoresConRespaldoAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Qdrant.LeerResultadoAsync(respuesta, ct)
+
+- **Qué hace:** controla la respuesta con Qdrant.VerificarAsync y devuelve su campo `result`, donde Qdrant pone siempre el resultado. Lo copia con `Clone`, porque el documento JSON se libera al salir del `using`.
+- **Recibe:** la respuesta HTTP y el token de cancelación.
+- **Devuelve:** el contenido de `result`, como `JsonElement`.
+- **Efectos:** lee el cuerpo de la respuesta.
+- **La llaman:** las funciones de Qdrant que leen un resultado.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Qdrant.VerificarAsync(respuesta, ct)
+
+- **Qué hace:** si Qdrant contestó con un error, lanza una excepción con su mensaje real, por ejemplo que la colección no existe.
+- **Recibe:** la respuesta HTTP y el token de cancelación.
+- **Devuelve:** nada. Si la respuesta es un error, lanza `InvalidOperationException`.
+- **Efectos:** lee el cuerpo de la respuesta cuando es un error.
+- **La llaman:** todas las funciones de Qdrant que hacen un pedido.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Qdrant.LeerEntero(elemento, campo)
+
+- **Qué hace:** lee un número entero de un campo del JSON, o 0 si el campo no está o viene en `null`.
+- **Recibe:** el elemento JSON y el nombre del campo.
+- **Devuelve:** el número.
+- **Efectos:** ninguno.
+- **La llaman:** Qdrant.LeerInfoAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
 
 ## RagBasico.Api\RagBasico.Api.csproj
 
@@ -660,14 +920,14 @@ RAG-BASICO\
 - **Responsabilidad:** los pedidos de prueba de la fase, listos para mandar con "Send Request" desde Visual Studio, o desde VS Code con la extensión "REST Client".
 - **Contiene:** la variable `@host`, con la dirección y el puerto de la fase, y un pedido por cada endpoint de esta versión.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant.
 
 ## RagBasico.Api\Redactor.cs
 
 - **Responsabilidad:** la "G" de RAG: armar la respuesta con los fragmentos encontrados.
 - **Contiene:** la clase `Redactor`, con dos constantes: `SinRespuesta`, la única frase para "no encontré", y `Reglas`, el mensaje de sistema con las cinco reglas para Qwen (usar solo los fragmentos, citar con `[n]`, la frase exacta cuando no alcanza, e ignorar instrucciones que vengan dentro de los documentos).
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-3-medicion, fase-5-vectores.
+- **Cambió en:** fase-3-medicion, fase-5-vectores, fase-7-qdrant.
 
 ### Clase Redactor
 
@@ -681,11 +941,11 @@ RAG-BASICO\
 
 - **Qué hace:** busca los fragmentos de la pregunta con el modo pedido y le pide la respuesta a Qwen. Si no hay fragmentos, responde la frase fija sin llamar al modelo; por vectores casi nunca pasa, así que el "no sé" lo decide Qwen. Si Qwen responde la frase de "no encontré", la devuelve sin fuentes. Al final registra la consulta, con el modo.
 - **Recibe:** la pregunta, el modo de búsqueda y el token de cancelación.
-- **Devuelve:** un `RespuestaRag`: el texto, las fuentes numeradas como las cita el modelo y los tiempos.
-- **Efectos:** lee SQL Server (por el buscador), llama a Ollama y escribe una fila en `rag.Consulta`.
+- **Devuelve:** un `RespuestaRag`: el texto, las fuentes numeradas como las cita el modelo, los tiempos y el aviso de la búsqueda, si la híbrida siguió sin Qdrant.
+- **Efectos:** busca con el buscador (SQL Server, Ollama y Qdrant según el modo), llama a Ollama para redactar y escribe una fila en `rag.Consulta`.
 - **La llaman:** el endpoint `POST /preguntar` y Evaluador.CorrerAsync.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-3-medicion (registra la consulta), fase-5-vectores (recibe el modo).
+- **Cambió en:** fase-3-medicion (registra la consulta), fase-5-vectores (recibe el modo), fase-7-qdrant (pasa el aviso de la búsqueda).
 
 ### Redactor.ArmarMensaje(pregunta, fragmentos)
 
@@ -752,31 +1012,216 @@ RAG-BASICO\
 - **Desde:** fase-6-hibrida.
 - **Cambió en:** nada todavía.
 
+## RagBasico.Api\Salud.cs
+
+- **Responsabilidad:** revisar que estén andando todas las piezas de la demo, para saberlo antes de presentarla y no en medio.
+- **Contiene:** la clase `Salud` y su record privado `Conteo`, con los números de la base que muestra el chequeo de SQL Server.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Clase Salud
+
+- **Responsabilidad:** los cinco chequeos de `GET /salud`. Cada uno atrapa su propio error, así un chequeo que falla no impide ver los demás.
+- **Recibe en el constructor:** los clientes de `Ollama` y de `Qdrant`, y la configuración, de donde lee `ConnectionStrings:Rag`, `Ollama:ModeloChat` y `Ollama:ModeloEmbeddings`.
+- **La registra:** Program.cs, con `AddScoped`.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Salud.RevisarAsync(ct)
+
+- **Qué hace:** corre los cinco chequeos y arma el estado general: `error` si falla algo sin lo que la demo no anda, `aviso` si algo anda a medias o si falta Qdrant, que tiene respaldo, y `ok` si anda todo.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** un `InformeSalud`.
+- **Efectos:** los de cada chequeo: lee SQL Server y hace pedidos a Ollama y a Qdrant.
+- **La llaman:** el endpoint `GET /salud`.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Salud.RevisarSqlAsync(ct)
+
+- **Qué hace:** se conecta a la base y cuenta documentos, fragmentos y fragmentos con vector. Avisa si no hay documentos o si faltan vectores.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** un `Chequeo`: `ok`, `aviso` o `error` si no se pudo conectar.
+- **Efectos:** lee `rag.Documento` y `rag.Fragmento`.
+- **La llaman:** Salud.RevisarAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Salud.RevisarFullTextAsync(ct)
+
+- **Qué hace:** controla que el Full-Text no tenga cambios pendientes: mientras tanto, la búsqueda por palabras no ve todo.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** un `Chequeo`: `ok`, `aviso` si hay cambios pendientes, o `error`.
+- **Efectos:** lee `OBJECTPROPERTYEX(..., 'TableFulltextPendingChanges')`.
+- **La llaman:** Salud.RevisarAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Salud.RevisarModelosAsync(ct)
+
+- **Qué hace:** pide a Ollama la lista de modelos instalados y controla que estén los dos de la configuración. Si falta alguno, dice con qué comando bajarlo.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** un `Chequeo`: `ok`, o `error` si Ollama no responde o falta un modelo.
+- **Efectos:** un pedido a Ollama.
+- **La llaman:** Salud.RevisarAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Salud.RevisarDimensionAsync(ct)
+
+- **Qué hace:** calcula el vector de una palabra y controla que tenga 1024 números, como la columna `Embedding` y la colección de Qdrant. Si alguien cambia el modelo de embeddings por otro de otra dimensión, este chequeo lo dice.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** un `Chequeo`: `ok` o `error`.
+- **Efectos:** un pedido a Ollama.
+- **La llaman:** Salud.RevisarAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Salud.RevisarQdrantAsync(ct)
+
+- **Qué hace:** controla que Qdrant responda, que sea la versión 1.20.1 o posterior (antes, en Windows, borrar una colección podía fallar) y que exista la colección; muestra cuántos puntos tiene y cuántos están en el índice HNSW. Si algo falla es un aviso y no un error: la híbrida sigue con los vectores de SQL.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** un `Chequeo`: `ok` o `aviso`.
+- **Efectos:** pedidos a Qdrant.
+- **La llaman:** Salud.RevisarAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Salud.EstaInstalado(instalados, modelo)
+
+- **Qué hace:** dice si un modelo está en la lista de instalados, sin distinguir mayúsculas. Un nombre sin etiqueta, como `llama3`, es el mismo que `llama3:latest`.
+- **Recibe:** la lista de modelos instalados y el modelo buscado.
+- **Devuelve:** `true` si está.
+- **Efectos:** ninguno.
+- **La llaman:** Salud.RevisarModelosAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+## RagBasico.Api\Sincronizador.cs
+
+- **Responsabilidad:** mantener la colección de Qdrant igual a los vectores de SQL Server. SQL es la base que manda; Qdrant es una copia de los vectores con un índice para buscar rápido.
+- **Contiene:** la clase `Sincronizador`, su constante privada `Lote` (256 vectores por pedido) y su record privado `VectorGuardado`, una fila de SQL con el vector como texto JSON.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Clase Sincronizador
+
+- **Responsabilidad:** las dos bases referencian los mismos fragmentos sin una foreign key entre ellas: el id de cada punto de Qdrant es el número de fragmento de SQL. Esta clase compara los dos lados y los iguala.
+- **Recibe en el constructor:** el cliente de `Qdrant` y la configuración, de donde lee `ConnectionStrings:Rag`.
+- **La registra:** Program.cs, con `AddScoped`.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Sincronizador.Comparar(enSql, enQdrant)
+
+- **Qué hace:** compara los números de fragmento con vector en SQL con los ids de los puntos de Qdrant. Faltan en Qdrant los que están solo en SQL; sobran los que están solo en Qdrant. Compara números y no cantidades: con la misma cantidad de cada lado, puede faltar uno y sobrar otro.
+- **Recibe:** los números de SQL y los ids de Qdrant, en cualquier orden.
+- **Devuelve:** un `ComparacionIds` con las dos listas, ordenadas.
+- **Efectos:** ninguno.
+- **La llaman:** Sincronizador.EstadoAsync y Sincronizador.PonerAlDiaAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Sincronizador.EstadoAsync(ct)
+
+- **Qué hace:** compara SQL con Qdrant sin cambiar nada: los números de fragmento de los dos lados, una muestra de vectores (Sincronizador.MuestraCoincideAsync) y cuántos vectores tiene el índice HNSW. Arma un mensaje que dice si están iguales y, si no, qué hacer.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** un `EstadoQdrant`.
+- **Efectos:** lee `rag.Fragmento` y hace pedidos a Qdrant.
+- **La llaman:** el endpoint `GET /qdrant/estado` y Evaluador.CorrerAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Sincronizador.PonerAlDiaAsync(detalle, ct)
+
+- **Qué hace:** pone Qdrant al día con SQL y anota el resultado en el detalle.
+  1. Si la colección no existe, la crea.
+  2. Si la muestra de vectores no coincide, la base se recreó: reconstruye la colección entera.
+  3. Si no, borra los puntos que sobran y sube los vectores que faltan.
+  4. Si Qdrant no responde, lo anota como aviso y no falla: SQL ya quedó bien, y la próxima vez que se llame se pone al día.
+- **Recibe:** la lista del detalle de `/indexar` o `/vectores` y el token de cancelación.
+- **Devuelve:** nada. Agrega al detalle una línea que empieza con `QDRANT:` o con `AVISO:`.
+- **Efectos:** lee `rag.Fragmento` y escribe en Qdrant.
+- **La llaman:** Indexador.IndexarCarpetaAsync y Vectorizador.CalcularPendientesAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Sincronizador.ReconstruirAsync(ct)
+
+- **Qué hace:** borra la colección, comprueba que se borró, la vuelve a crear y le sube todos los vectores de SQL. En Windows, antes de Qdrant 1.20.1, el borrado podía contestar que sí y dejar la colección: por eso pregunta si sigue existiendo y lo intenta hasta tres veces antes de dar un error que dice cómo arreglarlo.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** un `InformeQdrant`: cuántos puntos se subieron, cuántos había antes, el tiempo y el detalle.
+- **Efectos:** borra y crea la colección en Qdrant, y lee `rag.Fragmento`.
+- **La llaman:** el endpoint `POST /qdrant/reconstruir` y Sincronizador.PonerAlDiaAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Sincronizador.LeerIdsSqlAsync(ct)
+
+- **Qué hace:** lee de SQL los números de los fragmentos que tienen vector. Los que todavía no tienen vector no cuentan: no hay nada que subir a Qdrant.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** la lista de números, en orden.
+- **Efectos:** lee `rag.Fragmento`.
+- **La llaman:** Sincronizador.EstadoAsync, Sincronizador.PonerAlDiaAsync y Sincronizador.ReconstruirAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Sincronizador.SubirAsync(ids, ct)
+
+- **Qué hace:** lee de SQL los vectores de los fragmentos pedidos, de a 256, y los sube a Qdrant. SQL Server devuelve el vector como texto JSON cuando se lo convierte a `NVARCHAR(MAX)`.
+- **Recibe:** los números de fragmento y el token de cancelación.
+- **Devuelve:** cuántos puntos subió.
+- **Efectos:** lee `rag.Fragmento` y escribe en Qdrant.
+- **La llaman:** Sincronizador.PonerAlDiaAsync y Sincronizador.ReconstruirAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Sincronizador.MuestraCoincideAsync(enSql, comparacion, ct)
+
+- **Qué hace:** compara el vector de hasta tres fragmentos que están en los dos lados: el primero, el del medio y el último. Si la base se recreó, los números se repiten pero los textos son otros, y Qdrant devolvería fragmentos equivocados sin ningún error: los vectores lo delatan. Compara la dirección (coseno de 0,999 o más) y no número por número, porque Qdrant guarda los vectores normalizados.
+- **Recibe:** los números de SQL, la comparación y el token de cancelación.
+- **Devuelve:** `true` si coinciden, `false` si no, o `null` si no hay fragmentos en común para comparar.
+- **Efectos:** lee `rag.Fragmento` y hace pedidos a Qdrant.
+- **La llaman:** Sincronizador.EstadoAsync y Sincronizador.PonerAlDiaAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+### Sincronizador.Coseno(a, b)
+
+- **Qué hace:** calcula el coseno entre dos vectores: el producto dividido por el largo de cada uno. Da 1 si apuntan para el mismo lado.
+- **Recibe:** los dos vectores.
+- **Devuelve:** el coseno, o 0 si los vectores tienen distinto largo o son todos ceros.
+- **Efectos:** ninguno.
+- **La llaman:** Sincronizador.MuestraCoincideAsync.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
 ## RagBasico.Api\Vectorizador.cs
 
 - **Responsabilidad:** calcular el vector de cada fragmento que todavía no lo tiene y guardarlo en `rag.Fragmento`.
 - **Desde:** fase-5-vectores.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-7-qdrant.
 
 ### Clase Vectorizador
 
-- **Responsabilidad:** el camino de un fragmento hasta su vector: leerlo de la base, pedirle el vector a Ollama y guardarlo.
-- **Recibe en el constructor:** el cliente de `Ollama` y la configuración, de donde lee `ConnectionStrings:Rag` y `Rag:LoteVectores`.
+- **Responsabilidad:** el camino de un fragmento hasta su vector: leerlo de la base, pedirle el vector a Ollama y guardarlo, en SQL y en Qdrant.
+- **Recibe en el constructor:** el cliente de `Ollama`, el `Sincronizador`, para subir los vectores nuevos a Qdrant, y la configuración, de donde lee `ConnectionStrings:Rag` y `Rag:LoteVectores`.
 - **La registra:** Program.cs, con `AddScoped`.
 - **Desde:** fase-5-vectores.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-7-qdrant (recibe el sincronizador).
 
 ### Vectorizador.CalcularPendientesAsync(ct)
 
 - **Qué hace:** recorre los fragmentos sin vector de a lotes de `Rag:LoteVectores`, en orden de número de fragmento.
   - Cada lote empieza después del último fragmento visto, en lugar de volver a buscar desde el principio. Así no relee lo ya hecho, que con un millón de fragmentos haría crecer el costo al cuadrado, y un fragmento que falla no traba la corrida: queda en `NULL` y se vuelve a intentar en el próximo `/vectores`.
   - Si fallan todos los fragmentos de un lote, uno por uno, corta la corrida: el problema no es de un fragmento sino de Ollama o del modelo.
+  - Al final pone Qdrant al día con Sincronizador.PonerAlDiaAsync: sube los vectores nuevos y, si Qdrant estuvo apagado, también los que le faltaban de antes.
 - **Recibe:** el token de cancelación.
 - **Devuelve:** un `InformeVectores`: cuántos vectores se calcularon, cuántos fallaron, cuántos fragmentos quedan sin vector, cuántos fragmentos por segundo, el tiempo como horas:minutos:segundos y el detalle. Si no había nada que hacer, el detalle dice `SIN CAMBIOS`.
-- **Efectos:** lee `rag.Fragmento` y `rag.Documento`, llama a Ollama y escribe `rag.Fragmento.Embedding`.
+- **Efectos:** lee `rag.Fragmento` y `rag.Documento`, llama a Ollama, escribe `rag.Fragmento.Embedding` y sube los vectores a Qdrant.
 - **La llaman:** el endpoint `POST /vectores`.
 - **Desde:** fase-5-vectores.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-7-qdrant (pone Qdrant al día).
 
 ### Vectorizador.ComoJson(vector)
 
@@ -812,19 +1257,20 @@ RAG-BASICO\
 
 - **Responsabilidad:** la configuración de la API. Cada clave está explicada en `docs\arquitectura.md`.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant.
 
 ## RagBasico.Api\wwwroot\index.html
 
-- **Responsabilidad:** la página de la demo: una caja para la pregunta, el selector de modo (híbrida, solo palabras o solo vectores) y la respuesta con sus fuentes y los tiempos. La sirve la propia API en la raíz, `http://127.0.0.1:5086/`.
+- **Responsabilidad:** la página de la demo: una caja para la pregunta, el selector de modo (híbrida, solo palabras, solo vectores en SQL Server o solo vectores en Qdrant) y la respuesta con sus fuentes y los tiempos. La sirve la propia API en la raíz, `http://127.0.0.1:5087/`.
 - **Contiene:** HTML, el estilo y un script, todo en el mismo archivo y sin nada de internet, para que la demo ande sin conexión. El script:
   - manda la pregunta y el modo a `POST /preguntar` con `fetch`;
+  - muestra el aviso, arriba de la respuesta, si la híbrida siguió sin Qdrant;
   - muestra el texto con `textContent` y no con `innerHTML`, así el texto de un documento nunca se interpreta como HTML;
   - lista las fuentes y atenúa las que se le pasaron al modelo pero no citó;
   - no muestra el bloque de fuentes cuando la respuesta es "no encontré", porque cinco documentos debajo de "no encontré" confunden;
   - muestra el error de la API, por ejemplo el de un modo que no existe.
 - **Desde:** fase-6-hibrida.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-7-qdrant (el modo con Qdrant y el aviso).
 
 ## RagBasico.slnx
 
@@ -837,7 +1283,7 @@ RAG-BASICO\
 
 - **Responsabilidad:** cómo se arma esta versión: las piezas, los recorridos paso a paso, las tablas, la configuración y lo que está fuera del repo.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant.
 
 ## docs\erratas.md
 
@@ -887,11 +1333,17 @@ RAG-BASICO\
 - **Desde:** fase-6-hibrida.
 - **Cambió en:** nada todavía.
 
+## docs\fases\fase-7-qdrant.md
+
+- **Responsabilidad:** qué agregó la fase 7, en qué orden leerla, cómo probarla, qué se midió y qué se decidió.
+- **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
 ## docs\responsabilidades.md
 
 - **Responsabilidad:** este documento: qué hace cada archivo, clase, función y endpoint, y quién lo usa.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant.
 
 ## docs\worktrees.md
 
@@ -993,6 +1445,16 @@ RAG-BASICO\
   3. Por cada branch `fase-*`, local o del remoto: si su carpeta no existe, la crea separada (`git worktree add --detach`). Si existe y tiene cambios en archivos que git sigue, avisa y no la toca. Si no, la mueve a la versión actual de su branch; los archivos nuevos que no sigue git, como la configuración que deja un editor, se conservan. Si una fase está solo en el remoto, usa esa versión, por ejemplo `origin/fase-0-base`.
   4. Avisa qué carpetas ya no tienen branch, y termina mostrando `git worktree list`.
 - **Desde:** fase-0-base.
+- **Cambió en:** nada todavía.
+
+## scripts\iniciar-qdrant.ps1
+
+- **Responsabilidad:** arranca Qdrant escuchando solo en esta PC (`127.0.0.1`), con su carpeta de datos fija y sin telemetría. Sin esto, Qdrant escucha en toda la red y sin clave, y guarda los datos en una carpeta relativa a donde se lo arranca.
+- **Parámetros:** `-Carpeta`, opcional: la carpeta de `qdrant.exe`. Por defecto, `RAG-BASICO-datos\qdrant` al lado de la carpeta principal del repo, también si se lo corre desde una carpeta de fase. Los datos quedan en sus subcarpetas `storage` y `snapshots`.
+- **Ejemplo:** `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\iniciar-qdrant.ps1`
+- **Requiere:** `qdrant.exe` 1.20.2 (el archivo `qdrant-x86_64-pc-windows-msvc.zip` de la página de versiones de Qdrant en GitHub), git 2.31 o posterior y Windows PowerShell 5.1. Si falta `qdrant.exe`, dice de dónde bajarlo.
+- **Pasos:** busca `qdrant.exe`; define, solo para este proceso, `QDRANT__SERVICE__HOST=127.0.0.1`, los puertos 6333 y 6334, `QDRANT__STORAGE__STORAGE_PATH`, `QDRANT__STORAGE__SNAPSHOTS_PATH` y `QDRANT__TELEMETRY_DISABLED=true`; y arranca Qdrant desde su carpeta. Queda corriendo en esa consola hasta Ctrl+C. No hace falta abrirle el firewall.
+- **Desde:** fase-7-qdrant.
 - **Cambió en:** nada todavía.
 
 ## sql\01_base.sql
