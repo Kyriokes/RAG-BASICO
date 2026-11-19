@@ -13,10 +13,11 @@ Además, la fase blinda la demo: `/salud` dice antes de presentar si falta algo,
 | `RagBasico.Api\Qdrant.cs` | Nuevo: el cliente HTTP de Qdrant |
 | `RagBasico.Api\Sincronizador.cs` | Nuevo: compara SQL con Qdrant por número de fragmento, los iguala y reconstruye la colección |
 | `RagBasico.Api\Salud.cs` | Nuevo: los cinco chequeos de `/salud` |
-| `RagBasico.Api\Buscador.cs` | El modo `vectores-qdrant`; la híbrida usa Qdrant y sigue con SQL si Qdrant no responde; las búsquedas devuelven el aviso |
+| `docs\erratas.md` | La primera errata: el corte de `/vectores` de la fase 5 |
+| `RagBasico.Api\Buscador.cs` | El modo `vectores-qdrant`; la híbrida usa Qdrant y sigue con SQL si Qdrant no responde o no tiene vectores; las búsquedas devuelven el aviso |
 | `RagBasico.Api\Indexador.cs` | Pone Qdrant al día después de cargar: borra de Qdrant lo que ya no está |
-| `RagBasico.Api\Vectorizador.cs` | Pone Qdrant al día después de calcular: sube los vectores nuevos |
-| `RagBasico.Api\Evaluador.cs` | Revisa Qdrant antes de medir y corta si no responde; avisa si la híbrida siguió sin Qdrant |
+| `RagBasico.Api\Vectorizador.cs` | Pone Qdrant al día después de calcular: sube los vectores nuevos. Corta solo si Ollama no responde (una errata de la fase 5) |
+| `RagBasico.Api\Evaluador.cs` | Revisa Qdrant antes de medir y corta si no sirve para medir; un modo que falla no corta el examen; avisa si la híbrida siguió sin Qdrant |
 | `RagBasico.Api\Redactor.cs` | Pasa el aviso de la búsqueda a la respuesta |
 | `RagBasico.Api\Ollama.cs` | La lista de modelos instalados y el calentamiento |
 | `RagBasico.Api\Modelos.cs` | El aviso en `RespuestaRag`, y los records de la búsqueda, de Qdrant y de la salud |
@@ -62,6 +63,8 @@ Endpoints: `GET /salud`, `GET /qdrant/estado` y `POST /qdrant/reconstruir`. `GET
 | Reconstruir con un borrado que dice que sí y no borra | Lo intenta de nuevo y la vuelve a crear | El Qdrant falso, que imita el bug de Windows | 19/11/2026 |
 | `/salud` sin SQL Server | 503, con SQL en `error`, los modelos y la dimensión en `ok` y Qdrant en `aviso` por la colección | La API corriendo con un Ollama y un Qdrant falsos | 19/11/2026 |
 | Calentamiento al arrancar | El log dice "Los dos modelos quedaron cargados en Ollama" | La API con el Ollama falso | 19/11/2026 |
+| Revisión de las fases 5 a 7 | Contra la documentación de SQL Server 2025, Qdrant 1.20 y Ollama, sin errores de sintaxis ni de formato. Encontró cuatro problemas de lógica, arreglados: el examen con la colección vacía, la híbrida con la colección vacía, el corte de `/vectores` y el aviso de Qdrant | Una revisión aparte del código | 19/11/2026 |
+| Arreglos de la revisión | 5 casos: cuándo un error muestra que Ollama no responde, y el aviso de la colección vacía | Un proyecto de prueba aparte | 19/11/2026 |
 | Tiempo de reconstruir Qdrant | pendiente | `POST /qdrant/reconstruir` | pendiente |
 | ms de búsqueda en SQL contra Qdrant, y el examen de los cuatro modos | pendiente | `POST /evaluar` | pendiente |
 | Búsquedas con el índice HNSW según la telemetría | pendiente | `GET /telemetry` de Qdrant | pendiente |
@@ -80,7 +83,10 @@ Versiones: Qdrant 1.20.2, más las de la fase 5. Commit medido: el último de `f
 | Los dos umbrales en 10 KB | Los valores por defecto | Con pocos miles de vectores, Qdrant no armaría el índice o no lo usaría, y la fase "del índice" no tendría índice |
 | La híbrida sigue con SQL si Qdrant no responde, y lo avisa | Un error 500 | La demo no se cae por una pieza que tiene respaldo, y el aviso no esconde lo que pasó |
 | `vectores-qdrant` da error si Qdrant no responde | Caer en SQL también | Ese modo existe para medir Qdrant; caer en SQL mediría otra cosa |
-| `/evaluar` se corta sin Qdrant | Medir lo que se pueda | La tabla mezclaría modos que miden otra cosa |
+| `/evaluar` se corta sin Qdrant, sin la colección, con la colección vacía o con vectores de otra base | Medir lo que se pueda | La tabla mezclaría modos que miden otra cosa |
+| Un modo que falla a la mitad no corta el examen | Que el error corte todo | Se perderían los minutos de los otros modos, con sus llamadas a Qwen |
+| Una colección vacía lleva al respaldo en SQL, con su propio aviso | Seguir con la lista vacía | La híbrida quedaba solo con las palabras, sin ningún aviso |
+| `/vectores` corta solo si Ollama no responde, o si fallan cinco lotes seguidos | Cortar si falla un lote entero, como hasta la fase 6 | Un lote de textos que Ollama no acepta trababa todas las corridas en el mismo lugar |
 | `/salud` con Qdrant apagado da aviso y 200 | Error y 503 | La demo anda; un 503 haría creer que no |
 | Qdrant solo en `127.0.0.1`, con datos fijos y sin telemetría | Los valores por defecto | Por defecto escucha en toda la red sin clave y guarda los datos donde se lo arranca |
 | Calentar los modelos al arrancar | Esperar a la primera pregunta | La primera pregunta de una demo no puede tardar 30 segundos |

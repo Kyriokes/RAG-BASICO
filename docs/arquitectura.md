@@ -58,7 +58,7 @@ SQL Server es la base que manda: tiene los textos y los vectores. Qdrant tiene u
 1. El `Vectorizador` pide a `rag.Fragmento` los primeros 16 fragmentos sin vector (`Rag:LoteVectores`), en orden de número de fragmento.
 2. Le manda sus textos a Ollama en un solo pedido a `/api/embed`, sin instrucción, y recibe un vector de 1024 números por fragmento.
 3. Los guarda en `rag.Fragmento.Embedding`, en una transacción. El vector viaja como texto JSON con punto decimal y SQL Server lo convierte con `CAST(... AS VECTOR(1024))`.
-4. Si el lote falla, prueba sus fragmentos de a uno y anota los que fallan. Si fallan todos, corta: Ollama no anda o no tiene el modelo.
+4. Si el lote falla, prueba sus fragmentos de a uno y anota los que fallan. Si Ollama no responde, corta: lo que falta queda para el próximo `/vectores`. También corta si fallan todos los fragmentos de cinco lotes seguidos, que es algo general y no un fragmento.
 5. Sigue con el lote siguiente, que empieza después del último fragmento visto: no relee lo ya hecho, y un fragmento que falla queda para el próximo `/vectores`.
 6. Pone Qdrant al día: sube los vectores nuevos y, si Qdrant estuvo apagado, también los que le faltaban de antes.
 7. Devuelve cuántos calculó, cuántos fallaron, cuántos quedan sin vector, cuántos fragmentos por segundo y el tiempo total.
@@ -70,7 +70,7 @@ SQL Server es la base que manda: tiene los textos y los vectores. Qdrant tiene u
 3. `Sincronizador.Comparar` arma las dos listas: los que faltan en Qdrant y los que sobran. Compara números, no cantidades.
 4. Compara el vector de una muestra de tres fragmentos que están en los dos lados. Si no coincide, la base se recreó y los números se repiten con otros textos: reconstruye la colección entera.
 5. Si no, borra los puntos que sobran y sube los vectores que faltan, de a 256, leídos de SQL.
-6. Si Qdrant no responde, lo anota como aviso en el detalle y no falla: SQL ya quedó bien, y la próxima vez se pone al día.
+6. Si algo falla, lo anota como aviso en el detalle, con el tipo de error, y no falla: SQL ya quedó bien, y la próxima vez se pone al día.
 
 **Mirar y reconstruir Qdrant:**
 
@@ -83,8 +83,8 @@ La colección se crea con vectores de 1024 números comparados por coseno, y con
 
 - **Por palabras:** `FREETEXTTABLE` corta la pregunta en palabras, busca sus plurales y conjugaciones en el índice, puntúa cada fragmento y devuelve los 5 mejores.
 - **Por vectores, en SQL Server:** Ollama calcula el vector de la pregunta, con la instrucción en inglés de `Ollama:InstruccionPregunta` antes (`Instruct: ...` y `Query:` pegado a la pregunta). SQL Server ordena todos los fragmentos con vector por `VECTOR_DISTANCE('cosine', ...)` y devuelve los 5 más cercanos. Es una búsqueda exacta: recorre todos los vectores.
-- **Por vectores, en Qdrant (`vectores-qdrant`):** el mismo vector de la pregunta; Qdrant devuelve los números de los 5 fragmentos más cercanos usando el índice HNSW, y SQL Server sus textos, en ese orden. Si Qdrant no responde, da error: este modo existe para medir Qdrant.
-- **Híbrida**, el modo por defecto: arranca las dos búsquedas al mismo tiempo, por palabras y por vectores en Qdrant, pidiendo 20 candidatos a cada una (`Rag:CandidatosHibrida`), y espera a las dos con `Task.WhenAll`: tarda lo que la más lenta, no la suma. Si Qdrant no responde, la parte por vectores usa SQL con el mismo vector de la pregunta, y la respuesta lleva el aviso. `Rrf.Mezclar` mezcla las dos listas por puesto: cada fragmento suma 1 / (60 + puesto) en cada lista donde aparece, y quedan los 5 de mayor puntaje.
+- **Por vectores, en Qdrant (`vectores-qdrant`):** el mismo vector de la pregunta; Qdrant devuelve los números de los 5 fragmentos más cercanos usando el índice HNSW, y SQL Server sus textos, en ese orden. Si Qdrant no responde, o la colección está vacía, da error: este modo existe para medir Qdrant.
+- **Híbrida**, el modo por defecto: arranca las dos búsquedas al mismo tiempo, por palabras y por vectores en Qdrant, pidiendo 20 candidatos a cada una (`Rag:CandidatosHibrida`), y espera a las dos con `Task.WhenAll`: tarda lo que la más lenta, no la suma. Si Qdrant no responde, o no tiene vectores, la parte por vectores usa SQL con el mismo vector de la pregunta, y la respuesta lleva el aviso. `Rrf.Mezclar` mezcla las dos listas por puesto: cada fragmento suma 1 / (60 + puesto) en cada lista donde aparece, y quedan los 5 de mayor puntaje.
 
 Se mezclan puestos y no puntajes porque el `RANK` del Full-Text y la distancia coseno miden cosas distintas, en escalas distintas: no se pueden sumar.
 
@@ -110,10 +110,10 @@ Se mezclan puestos y no puntajes porque el `RANK` del Full-Text y la distancia c
 
 1. El `Evaluador` lee `examen.csv` (ruta `Rag:ArchivoExamen`). Si no existe o no tiene preguntas, lo avisa.
 2. Avisa si el examen nombra un PDF que no está cargado, espera hasta un minuto a que el Full-Text no tenga cambios pendientes y avisa si hay fragmentos sin vector.
-3. Revisa Qdrant: si no está igual a SQL, lo avisa; si no responde, corta el examen, porque sin Qdrant no se pueden medir los modos que lo usan.
+3. Revisa Qdrant: corta el examen si no responde, si la colección no existe o está vacía, o si sus vectores son de otra base, porque los modos que lo usan medirían otra cosa. Si solo le faltan o le sobran algunos fragmentos, lo avisa.
 4. En cada modo, `palabras`, `vectores`, `vectores-qdrant` e `hibrida`, cada pregunta con respuesta pasa por la búsqueda: se anota en qué puesto apareció un documento correcto, de 1 a 5, o 0 si no apareció.
 5. En cada modo, cada pregunta sin respuesta pasa por el `Redactor`: se cuenta si respondió la frase fija.
-6. Si en algún modo la híbrida tuvo que seguir sin Qdrant, lo avisa: esa fila no mide Qdrant.
+6. Si en algún modo la híbrida tuvo que seguir sin Qdrant, lo avisa: esa fila no mide Qdrant. Si un modo falla a la mitad, lo avisa y sigue con los demás.
 7. Devuelve una fila por modo ("1er lugar", "entre los 5", ms promedio y preguntas sin respuesta bien contestadas), el detalle por pregunta, las fallas y los avisos.
 
 ## 3. Tablas

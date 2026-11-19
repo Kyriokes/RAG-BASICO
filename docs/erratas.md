@@ -6,5 +6,4 @@ Este archivo solo se actualiza en la punta. Para ver las erratas de una fase vie
 
 | Fase | Archivo | Función | Síntoma | Arreglo |
 |---|---|---|---|---|
-
-Todavía no hay erratas.
+| fase-5-vectores | `RagBasico.Api\Vectorizador.cs` | `CalcularPendientesAsync` | Si fallaban todos los fragmentos de un lote por su contenido, `/vectores` cortaba la corrida culpando a Ollama, y como cada corrida empieza de nuevo, se trababa siempre en el mismo lote: los fragmentos de después no tenían vector nunca | En fase-7-qdrant: corta solo si Ollama no responde, o si fallan cinco lotes seguidos |
