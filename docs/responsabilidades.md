@@ -1,6 +1,6 @@
 # Responsabilidades
 
-Qué hace cada archivo, clase, función y endpoint de esta versión, y quién lo usa. Esta es la versión de `fase-3-medicion`.
+Qué hace cada archivo, clase, función y endpoint de esta versión, y quién lo usa. Esta es la versión de `fase-4-carga`.
 
 Cómo leerlo:
 
@@ -19,11 +19,12 @@ RAG-BASICO\
 ├─ README.md                       portada: qué es y cómo correr esta fase
 ├─ RagBasico.Api\                  la API web
 │  ├─ Buscador.cs                  búsqueda por palabras
-│  ├─ Chunker.cs                   corta el texto en fragmentos
+│  ├─ Chunker.cs                   corta el texto en fragmentos por párrafos
 │  ├─ Evaluador.cs                 corre el examen
-│  ├─ Indexador.cs                 carga los PDF en la base
+│  ├─ Indexador.cs                 pone la base al día con la carpeta de PDF
 │  ├─ Modelos.cs                   records de pedidos y respuestas
 │  ├─ Ollama.cs                    cliente HTTP de Ollama
+│  ├─ Planificador.cs              decide qué PDF cargar, dejar o borrar
 │  ├─ Program.cs                   arranque, servicios y endpoints
 │  ├─ Properties\
 │  │  └─ launchSettings.json       dirección, puerto y forma de arrancar
@@ -39,7 +40,8 @@ RAG-BASICO\
 │  │  ├─ fase-0-base.md            el esqueleto
 │  │  ├─ fase-1-ollama.md          C# y HTTP contra Qwen
 │  │  ├─ fase-2-rag-minimo.md      el primer RAG
-│  │  └─ fase-3-medicion.md        el examen y los tiempos
+│  │  ├─ fase-3-medicion.md        el examen y los tiempos
+│  │  └─ fase-4-carga.md           la carga incremental y el corte por párrafos
 │  ├─ responsabilidades.md         este documento
 │  └─ worktrees.md                 una carpeta por fase
 ├─ documentos.csv                  manifiesto de los PDF del examen
@@ -54,6 +56,7 @@ RAG-BASICO\
 └─ sql\                            scripts de la base
    ├─ 01_base.sql                  tablas y Full-Text
    ├─ 02_consultas.sql             registro de preguntas
+   ├─ 03_huella.sql                huella de carga de cada documento
    └─ consultas-utiles.sql         consultas para mirar la base
 ```
 
@@ -86,7 +89,7 @@ RAG-BASICO\
 
 - **Responsabilidad:** la portada del repo: qué es, qué hace falta para correr esta fase, cómo correrla, cómo recorrer las fases y la tabla de fases.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga.
 
 ## RagBasico.Api\Buscador.cs
 
@@ -114,9 +117,10 @@ RAG-BASICO\
 
 ## RagBasico.Api\Chunker.cs
 
-- **Responsabilidad:** cortar el texto de un documento en fragmentos del tamaño justo para buscar y para pasarle al modelo.
+- **Responsabilidad:** cortar el texto de un documento en fragmentos del tamaño justo para buscar y para pasarle al modelo, respetando los párrafos.
+- **Contiene:** la clase `Chunker`, con la constante pública `Version`, que entra en la huella de carga, y tres valores privados: `PalabrasDeParrafoCorto` (15), `Separadores` (los caracteres que separan palabras) y `LineaEnBlanco`, la expresión regular que reconoce dónde empieza un párrafo.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-4-carga.
 
 ### Clase Chunker
 
@@ -124,17 +128,21 @@ RAG-BASICO\
 - **Recibe en el constructor:** nada; una clase estática no tiene constructor.
 - **La registra:** nadie. Se usa directo: `Chunker.Partir(...)`.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-4-carga (corta por párrafos y tiene la constante `Version`).
 
 ### Chunker.Partir(texto, palabras, solapamiento)
 
-- **Qué hace:** corta el texto en ventanas de `palabras` palabras. Cada ventana repite las últimas `solapamiento` palabras de la anterior, para no cortar una idea al medio. Si el solapamiento no es menor que el tamaño, lo ignora.
-- **Recibe:** el texto, el tamaño de cada fragmento en palabras y cuántas palabras repetir.
-- **Devuelve:** la lista de fragmentos, en orden. Vacía si el texto no tiene palabras.
+- **Qué hace:** corta el texto en fragmentos de hasta `palabras` palabras, juntando párrafos enteros mientras entren.
+  - Un párrafo que no entra cierra el fragmento antes de empezar, si el fragmento ya tiene la mitad del tamaño. Si tiene menos, el principio del párrafo lo completa: así no quedan fragmentos chicos.
+  - Un párrafo más largo que el tamaño se corta en ventanas, como hacía la fase 2 con todo el texto.
+  - Cada fragmento repite las últimas `solapamiento` palabras del anterior. Si al final quedan menos palabras nuevas que repetidas, se suman al último fragmento en lugar de abrir uno que sería casi una copia del anterior.
+  - Si el solapamiento no es menor que la mitad del tamaño, lo ignora.
+- **Recibe:** el texto, el tamaño máximo de cada fragmento en palabras y cuántas palabras repetir.
+- **Devuelve:** la lista de fragmentos, en orden. Vacía si el texto no tiene palabras. El último puede pasar el tamaño por menos palabras que el solapamiento.
 - **Efectos:** ninguno.
-- **La llaman:** Indexador.IndexarArchivoAsync.
+- **La llaman:** Indexador.CargarArchivoAsync.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-4-carga (por párrafos, sin títulos sueltos ni fragmentos casi repetidos).
 
 ### Chunker.ContarPalabras(texto)
 
@@ -142,8 +150,28 @@ RAG-BASICO\
 - **Recibe:** el texto.
 - **Devuelve:** la cantidad de palabras.
 - **Efectos:** ninguno.
-- **La llaman:** Indexador.IndexarArchivoAsync, para descartar los PDF sin texto.
+- **La llaman:** Indexador.EsEscaneado e Indexador.RevisarTexto.
 - **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+### Chunker.SepararParrafos(texto)
+
+- **Qué hace:** separa el texto en párrafos por las líneas en blanco, que es como PdfPig marca un espacio grande entre dos renglones, y parte cada párrafo en palabras. Un párrafo de menos de 15 palabras, como un título o un número de página, se pega al que le sigue: así nunca queda solo en un fragmento ni al final del fragmento anterior, separado de su texto.
+- **Recibe:** el texto.
+- **Devuelve:** la lista de párrafos, cada uno como un arreglo de palabras. Vacía si el texto no tiene palabras.
+- **Efectos:** ninguno.
+- **La llaman:** Chunker.Partir.
+- **Desde:** fase-4-carga.
+- **Cambió en:** nada todavía.
+
+### Chunker.Cerrar(fragmentos, actual, solapamiento)
+
+- **Qué hace:** cierra el fragmento que se está armando: lo agrega a la lista y deja en `actual` solo sus últimas `solapamiento` palabras, que abren el fragmento siguiente.
+- **Recibe:** la lista de fragmentos, las palabras del fragmento que se está armando y cuántas repetir.
+- **Devuelve:** nada. Cambia las dos listas que recibe.
+- **Efectos:** ninguno fuera de esas dos listas.
+- **La llaman:** Chunker.Partir.
+- **Desde:** fase-4-carga.
 - **Cambió en:** nada todavía.
 
 ## RagBasico.Api\Evaluador.cs
@@ -222,47 +250,116 @@ RAG-BASICO\
 
 ## RagBasico.Api\Indexador.cs
 
-- **Responsabilidad:** cargar los PDF de la carpeta en la base: leerlos, cortarlos en fragmentos y guardarlos.
+- **Responsabilidad:** mantener la base igual a la carpeta de PDF: cargar los nuevos y los cambiados, no tocar los que siguen igual y borrar los que ya no están.
+- **Contiene:** la clase `Indexador` y su constante privada `PalabrasPorPaginaMinimas` (40): el promedio de palabras por página por debajo del cual un PDF se toma como escaneado.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-4-carga.
 
 ### Clase Indexador
 
-- **Responsabilidad:** el camino de un PDF hasta la base.
+- **Responsabilidad:** el camino de un PDF hasta la base, y decidir cuáles hacen ese camino.
 - **Recibe en el constructor:** la configuración, de donde lee `ConnectionStrings:Rag`, `Rag:CarpetaDocumentos`, `Rag:PalabrasPorFragmento` y `Rag:Solapamiento`.
 - **La registra:** Program.cs, con `AddScoped`.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-4-carga (carga incremental).
 
 ### Indexador.IndexarCarpetaAsync(ct)
 
-- **Qué hace:** borra todo lo cargado y vuelve a cargar cada PDF de la carpeta, en orden alfabético. Si un PDF falla, lo anota y sigue con el siguiente. Si la carpeta no existe, no toca la base y lo informa.
+- **Qué hace:** pone la base al día con la carpeta.
+  1. Si la carpeta no existe, no toca la base y lo informa.
+  2. Calcula la huella de cada PDF, lee las huellas de la base y le pide el plan a Planificador.Armar.
+  3. Borra los documentos que ya no están en la carpeta. Si la carpeta no tiene ningún PDF, no borra nada y lo avisa.
+  4. Carga los nuevos y los cambiados. Los que siguen igual no se vuelven a leer.
+  5. Si un PDF falla, lo anota y sigue con el siguiente.
 - **Recibe:** el token de cancelación.
-- **Devuelve:** un `InformeIndexado`: cuántos documentos y fragmentos se cargaron, el tiempo como horas:minutos:segundos y una línea por archivo ("OK", "SIN TEXTO" o "ERROR").
-- **Efectos:** borra todas las filas de `rag.Documento` y, en cascada, de `rag.Fragmento`, y después inserta las nuevas. Lee los PDF de la carpeta.
+- **Devuelve:** un `InformeIndexado`: cuántos PDF se cargaron, cuántos quedaron igual y cuántos se borraron, cuántos fragmentos se guardaron, el tiempo como horas:minutos:segundos y el detalle. El detalle tiene una línea por cada PDF cargado, borrado, sin texto o con error; si no hubo nada que hacer, una sola línea `SIN CAMBIOS`.
+- **Efectos:** lee los PDF de la carpeta y `rag.Documento`; borra filas de `rag.Documento` (y en cascada de `rag.Fragmento`) e inserta las nuevas.
 - **La llaman:** el endpoint `POST /indexar`.
 - **Desde:** fase-2-rag-minimo.
+- **Cambió en:** fase-4-carga (carga solo lo nuevo o cambiado y borra lo que ya no está, en lugar de recargar todo).
+
+### Indexador.CalcularHuella(ruta, parametros)
+
+- **Qué hace:** calcula la huella de carga de un PDF: el sha256 de sus bytes seguidos de los parámetros de corte. Lee el archivo de a bloques de 80 KB, así un PDF grande no se carga entero en memoria. No es el sha256 del manifiesto (`documentos.csv`), que mira solo el archivo: esta huella también cambia si cambia la forma de cortar.
+- **Recibe:** la ruta del PDF y el texto con los parámetros de corte.
+- **Devuelve:** los 32 bytes de la huella.
+- **Efectos:** lee el archivo.
+- **La llaman:** Indexador.LeerCarpeta.
+- **Desde:** fase-4-carga.
 - **Cambió en:** nada todavía.
 
-### Indexador.IndexarArchivoAsync(conexion, ruta, ct)
+### Indexador.EsEscaneado(paginas)
 
-- **Qué hace:** carga un PDF: lo lee, lo corta y guarda el documento y sus fragmentos en una sola transacción, así nunca queda un documento a medias. Cada fragmento empieza con `Documento: <nombre>`, para que la búsqueda también lo encuentre por el nombre del archivo. Un PDF con menos de 20 palabras se toma como escaneado y no se carga.
-- **Recibe:** la conexión abierta, la ruta del PDF y el token de cancelación.
-- **Devuelve:** la cantidad de fragmentos guardados, o -1 si el PDF no tiene texto.
-- **Efectos:** inserta una fila en `rag.Documento` y una por fragmento en `rag.Fragmento`.
+- **Qué hace:** dice si un PDF parece escaneado: menos de 40 palabras por página en promedio. Un escaneo con un sello de firma en cada página tiene algunas palabras por página, pero no tantas; por eso se mira el promedio y no un total fijo.
+- **Recibe:** el texto de cada página.
+- **Devuelve:** `true` si parece escaneado, o si no tiene páginas.
+- **Efectos:** ninguno.
+- **La llaman:** Indexador.CargarArchivoAsync.
+- **Desde:** fase-4-carga.
+- **Cambió en:** nada todavía.
+
+### Indexador.RevisarTexto(paginas)
+
+- **Qué hace:** busca señales de que el texto salió mal del PDF, en este orden:
+  1. Menos del 80 % de los caracteres son letras o números: la fuente del PDF no se pudo leer.
+  2. Más de 12 caracteres por palabra en promedio: el PDF no marca los espacios y las palabras salen pegadas.
+  3. Una cuarta parte de las páginas, o más, con menos de 20 palabras: tiene partes escaneadas, como un anexo.
+- **Recibe:** el texto de cada página.
+- **Devuelve:** el motivo de la duda, o vacío si el texto parece bien.
+- **Efectos:** ninguno.
+- **La llaman:** Indexador.CargarArchivoAsync.
+- **Desde:** fase-4-carga.
+- **Cambió en:** nada todavía.
+
+### Indexador.LeerCarpeta(detalle)
+
+- **Qué hace:** lista los PDF de la carpeta, en orden alfabético, con su huella. Si un PDF no se puede leer, porque está bloqueado o no hay permiso, lo anota en el detalle y lo lista sin huella: así no se carga, pero como está en la carpeta tampoco se borra, y queda lo que había en la base.
+- **Recibe:** la lista del detalle, donde anota los errores.
+- **Devuelve:** la lista de `ArchivoEnCarpeta`.
+- **Efectos:** lee los PDF de la carpeta.
 - **La llaman:** Indexador.IndexarCarpetaAsync.
-- **Desde:** fase-2-rag-minimo.
+- **Desde:** fase-4-carga.
+- **Cambió en:** nada todavía.
+
+### Indexador.ParametrosDeCorte()
+
+- **Qué hace:** arma el texto con todo lo que cambia el resultado del corte: la versión del `Chunker`, el tamaño de fragmento, el solapamiento y la versión de PdfPig, porque otra versión puede sacar otro texto del mismo PDF. Por ejemplo: `corte=parrafos-1;palabras=300;solapamiento=50;pdfpig=0.1.16.0`.
+- **Recibe:** nada; usa el tamaño y el solapamiento de la configuración.
+- **Devuelve:** el texto.
+- **Efectos:** ninguno.
+- **La llaman:** Indexador.LeerCarpeta.
+- **Desde:** fase-4-carga.
+- **Cambió en:** nada todavía.
+
+### Indexador.CargarArchivoAsync(conexion, archivo, accion, detalle, ct)
+
+- **Qué hace:** carga un PDF nuevo o cambiado: lo lee, se fija si es un escaneo, lo corta, revisa si el texto es dudoso y lo guarda. Anota en el detalle una línea con la acción (`NUEVO` o `CAMBIÓ`), la cantidad de fragmentos y, si corresponde, `TEXTO DUDOSO` con el motivo, para revisarlo en SSMS. Si es un escaneo, igual borra la versión anterior y lo anota como `SIN TEXTO`. Si falla, lo anota como `ERROR` y, si el PDF había cambiado, queda la versión anterior.
+- **Recibe:** la conexión abierta, el PDF, la acción para el detalle, la lista del detalle y el token de cancelación.
+- **Devuelve:** cuántos fragmentos guardó: 0 si no tenía texto o si falló.
+- **Efectos:** lee el PDF; borra y escribe en `rag.Documento` y `rag.Fragmento`, por medio de Indexador.GuardarAsync.
+- **La llaman:** Indexador.IndexarCarpetaAsync.
+- **Desde:** fase-4-carga. Reemplaza a `IndexarArchivoAsync` de las fases 2 y 3.
+- **Cambió en:** nada todavía.
+
+### Indexador.GuardarAsync(conexion, archivo, partes, ct)
+
+- **Qué hace:** en una sola transacción, borra la versión anterior del PDF, si había, y guarda la nueva: una fila en `rag.Documento` con su huella y una por fragmento en `rag.Fragmento`, cada uno empezando con `Documento: <nombre>`. Si algo falla antes de confirmar, la transacción se descarta y queda la versión anterior. Sin fragmentos, solo borra.
+- **Recibe:** la conexión abierta, el PDF (nombre y huella), los fragmentos y el token de cancelación.
+- **Devuelve:** nada.
+- **Efectos:** borra la fila del PDF en `rag.Documento`, y en cascada sus fragmentos, e inserta las nuevas.
+- **La llaman:** Indexador.CargarArchivoAsync.
+- **Desde:** fase-4-carga.
 - **Cambió en:** nada todavía.
 
 ### Indexador.LeerPdf(ruta)
 
-- **Qué hace:** saca el texto de un PDF con PdfPig, página por página, en el orden en que se lee. Separa las páginas con una línea en blanco.
+- **Qué hace:** saca el texto de un PDF con PdfPig, página por página, en el orden en que se lee. PdfPig marca con una línea en blanco el espacio grande entre dos renglones, que es lo que el `Chunker` toma como cambio de párrafo.
 - **Recibe:** la ruta del PDF.
-- **Devuelve:** todo el texto del PDF. Vacío si es una imagen escaneada.
+- **Devuelve:** una lista con el texto de cada página. Una página escaneada viene vacía.
 - **Efectos:** lee el archivo.
-- **La llaman:** Indexador.IndexarArchivoAsync.
+- **La llaman:** Indexador.CargarArchivoAsync.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-4-carga (devuelve cada página por separado, para contar las palabras por página).
 
 ### Indexador.FormatearTiempo(tiempo)
 
@@ -278,7 +375,7 @@ RAG-BASICO\
 
 - **Responsabilidad:** los records que viajan entre las piezas: lo que llega en un pedido y lo que devuelve cada servicio. Un record es una clase chica de solo datos, que se compara por su contenido.
 - **Desde:** fase-1-ollama.
-- **Cambió en:** fase-2-rag-minimo, fase-3-medicion.
+- **Cambió en:** fase-2-rag-minimo, fase-3-medicion, fase-4-carga.
 
 | Record | Campo | Tipo | Para qué |
 |---|---|---|---|
@@ -289,9 +386,18 @@ RAG-BASICO\
 | `Fragmento` | `FragmentoId` | `int` | El número del fragmento en `rag.Fragmento` |
 | `Fragmento` | `Archivo` | `string` | El PDF de donde salió |
 | `Fragmento` | `Texto` | `string` | El texto, que empieza con `Documento: <nombre>` |
-| `InformeIndexado` | `Documentos`, `Fragmentos` | `int` | Cuántos PDF se cargaron y cuántos fragmentos se guardaron |
+| `InformeIndexado` | `Cargados` | `int` | Cuántos PDF nuevos o cambiados se cargaron |
+| `InformeIndexado` | `SinCambios`, `Borrados` | `int` | Cuántos PDF quedaron igual, y cuántos documentos se borraron porque ya no están en la carpeta |
+| `InformeIndexado` | `Fragmentos` | `int` | Cuántos fragmentos se guardaron en esta carga |
 | `InformeIndexado` | `Tiempo` | `string` | Lo que tardó, como horas:minutos:segundos |
-| `InformeIndexado` | `Detalle` | `List<string>` | Una línea por archivo: "OK", "SIN TEXTO" o "ERROR" |
+| `InformeIndexado` | `Detalle` | `List<string>` | Una línea por PDF cargado (`NUEVO` o `CAMBIÓ`, con `TEXTO DUDOSO` si corresponde), borrado (`BORRADO`), sin texto (`SIN TEXTO`) o con error (`ERROR`); o una sola línea `SIN CAMBIOS` |
+| `ArchivoEnCarpeta` | `Archivo`, `Ruta` | `string` | El nombre del PDF y su ruta completa |
+| `ArchivoEnCarpeta` | `Huella` | `byte[]?` | La huella de carga; `null` si el archivo no se pudo leer |
+| `DocumentoCargado` | `DocumentoId` | `int` | El número del documento en `rag.Documento` |
+| `DocumentoCargado` | `Archivo` | `string` | El nombre del PDF |
+| `DocumentoCargado` | `Huella` | `byte[]?` | La huella con que se cargó; `null` si se cargó antes de `sql\03_huella.sql` |
+| `PlanDeCarga` | `Nuevos`, `Cambiados`, `SinCambios` | `List<ArchivoEnCarpeta>` | Los PDF que hay que cargar porque no estaban o porque cambiaron, y los que quedan igual |
+| `PlanDeCarga` | `Borrar` | `List<DocumentoCargado>` | Los documentos de la base que ya no están en la carpeta. Vacía si la carpeta no tiene ningún PDF |
 | `Fuente` | `Numero` | `int` | El número con que la cita el modelo: `[1]`, `[2]`... |
 | `Fuente` | `Archivo`, `FragmentoId` | `string`, `int` | El PDF y el fragmento exacto |
 | `RespuestaRag` | `Texto` | `string` | La respuesta, o la frase de "no encontré" |
@@ -356,6 +462,33 @@ RAG-BASICO\
 - **Desde:** fase-1-ollama.
 - **Cambió en:** nada todavía.
 
+## RagBasico.Api\Planificador.cs
+
+- **Responsabilidad:** decidir qué hacer con cada PDF comparando la carpeta con la base. No lee archivos ni la base: recibe las dos listas y devuelve el plan, así se puede probar sin SQL Server.
+- **Desde:** fase-4-carga.
+- **Cambió en:** nada todavía.
+
+### Clase Planificador
+
+- **Responsabilidad:** la comparación entre la carpeta y la base. Es estática: no guarda nada.
+- **Recibe en el constructor:** nada; una clase estática no tiene constructor.
+- **La registra:** nadie. Se usa directo: `Planificador.Armar(...)`.
+- **Desde:** fase-4-carga.
+- **Cambió en:** nada todavía.
+
+### Planificador.Armar(enCarpeta, enBase)
+
+- **Qué hace:** compara los PDF de la carpeta con los documentos cargados, por nombre y sin distinguir mayúsculas, como Windows y SQL Server.
+  - Un PDF que no está en la base es nuevo. Uno con la misma huella queda igual. Uno con otra huella, o cargado sin huella, cambió.
+  - Un documento de la base que no está en la carpeta se borra, salvo que la carpeta no tenga ningún PDF: puede ser un disco desconectado o una carpeta equivocada, y borrar todo por eso sería un desastre.
+  - Un PDF que no se pudo leer, sin huella, no se carga ni se borra.
+- **Recibe:** los PDF de la carpeta con su huella y los documentos de la base con la suya.
+- **Devuelve:** un `PlanDeCarga` con cuatro listas: nuevos, cambiados, sin cambios y para borrar.
+- **Efectos:** ninguno.
+- **La llaman:** Indexador.IndexarCarpetaAsync.
+- **Desde:** fase-4-carga.
+- **Cambió en:** nada todavía.
+
 ## RagBasico.Api\Program.cs
 
 - **Responsabilidad:** el punto de entrada de la API: arma la aplicación, registra los servicios, declara los endpoints y la deja escuchando.
@@ -379,10 +512,10 @@ RAG-BASICO\
 ### POST /indexar
 
 - **Recibe:** nada. Los PDF salen de la carpeta `Rag:CarpetaDocumentos`.
-- **Devuelve:** el `InformeIndexado` de la carga: documentos, fragmentos, tiempo y una línea por archivo.
+- **Devuelve:** el `InformeIndexado` de la carga: cuántos PDF se cargaron, cuántos quedaron igual y cuántos se borraron, los fragmentos, el tiempo y el detalle. La segunda vez seguida dice `SIN CAMBIOS`.
 - **La atiende:** una función de `Program.cs` que llama a Indexador.IndexarCarpetaAsync.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-4-carga (pone la base al día con la carpeta en lugar de recargar todo).
 
 ### GET /buscar
 
@@ -414,7 +547,7 @@ RAG-BASICO\
 - **Contiene:** un solo perfil, `http`: escucha en `http://127.0.0.1:508N`, donde N es el número de la fase, con el entorno `Development`, y abre el navegador. Así dos fases pueden correr a la vez. El template traía también un perfil `https` con puertos al azar, que se sacó porque chocaría entre fases.
 - **Por qué 127.0.0.1:** es la misma dirección que usan Ollama y Qdrant, que escuchan solo en IPv4, así todo el proyecto usa una sola. La consecuencia es que la API también escucha solo en IPv4: se la llama con `http://127.0.0.1:508N`, como hacen el archivo `.http` y el navegador que abre el perfil. Con `localhost`, los clientes de .NET (PowerShell, `WebClient`, `HttpClient`) prueban primero IPv6 y tardan unos 2 segundos más en conectarse.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga.
 
 ## RagBasico.Api\RagBasico.Api.csproj
 
@@ -431,7 +564,7 @@ RAG-BASICO\
 - **Responsabilidad:** los pedidos de prueba de la fase, listos para mandar con "Send Request" desde Visual Studio, o desde VS Code con la extensión "REST Client".
 - **Contiene:** la variable `@host`, con la dirección y el puerto de la fase, y un pedido por cada endpoint de esta versión.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga.
 
 ## RagBasico.Api\Redactor.cs
 
@@ -502,7 +635,7 @@ RAG-BASICO\
 
 - **Responsabilidad:** la configuración de la API. Cada clave está explicada en `docs\arquitectura.md`.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga.
 
 ## RagBasico.slnx
 
@@ -515,7 +648,7 @@ RAG-BASICO\
 
 - **Responsabilidad:** cómo se arma esta versión: las piezas, los recorridos paso a paso, las tablas, la configuración y lo que está fuera del repo.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga.
 
 ## docs\erratas.md
 
@@ -547,11 +680,17 @@ RAG-BASICO\
 - **Desde:** fase-3-medicion.
 - **Cambió en:** nada todavía.
 
+## docs\fases\fase-4-carga.md
+
+- **Responsabilidad:** qué agregó la fase 4, en qué orden leerla, cómo probarla, qué se midió y qué se decidió.
+- **Desde:** fase-4-carga.
+- **Cambió en:** nada todavía.
+
 ## docs\responsabilidades.md
 
 - **Responsabilidad:** este documento: qué hace cada archivo, clase, función y endpoint, y quién lo usa.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga.
 
 ## docs\worktrees.md
 
@@ -671,11 +810,24 @@ RAG-BASICO\
 - **Desde:** fase-3-medicion.
 - **Cambió en:** nada todavía.
 
+## sql\03_huella.sql
+
+- **Responsabilidad:** agrega la huella de carga a los documentos, para que `/indexar` no vuelva a procesar los PDF que no cambiaron.
+- **Qué crea:** la columna `Huella VARBINARY(32)` en `rag.Documento`, si no existe. Queda en `NULL` en los documentos cargados antes, que el próximo `/indexar` toma como cambiados y recarga.
+- **Variables sqlcmd:** `Base`, el nombre de la base.
+- **Desde:** fase-4-carga.
+- **Cambió en:** nada todavía.
+
 ## sql\consultas-utiles.sql
 
-- **Responsabilidad:** consultas para mirar la base desde SSMS: cuántos documentos y fragmentos hay, fragmentos al azar, si el Full-Text terminó de indexar, una búsqueda a mano y qué palabras busca el Full-Text a partir de una.
+- **Responsabilidad:** consultas para mirar la base desde SSMS:
+  - cuántos documentos y fragmentos hay, y tres fragmentos al azar;
+  - cada documento con su huella y su cantidad de fragmentos;
+  - los fragmentos de un documento, para revisar un PDF que `/indexar` marcó con `TEXTO DUDOSO`;
+  - los fragmentos de menos de 30 palabras, que con el corte por párrafos casi no tendría que haber;
+  - si el Full-Text terminó de indexar, una búsqueda a mano y qué palabras busca el Full-Text a partir de una.
 - **Qué crea:** nada. `scripts\crear-base.ps1` no la corre, porque su nombre no empieza con un número.
 - **Variables sqlcmd:** ninguna. Antes de usarla se elige la base de la fase en SSMS.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-4-carga.
 

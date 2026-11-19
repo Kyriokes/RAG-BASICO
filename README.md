@@ -4,7 +4,7 @@ Un prototipo de RAG (búsqueda en documentos y respuesta redactada por un modelo
 
 Cada fase agrega una pieza y queda marcada con su branch, así el proyecto se puede recorrer de la versión más chica a la final.
 
-**Esta es la fase 3: medir antes de mejorar.** Sobre el RAG por palabras de la fase 2, se suma un examen escrito antes de construir, un evaluador que lo corre y el registro de cada pregunta con lo que tardó cada parte.
+**Esta es la fase 4: cargar bien.** `POST /indexar` deja de recargar todo: con una huella por documento carga solo los PDF nuevos o cambiados, borra de la base los que ya no están en la carpeta, corta el texto por párrafos y avisa de los PDF escaneados o con texto dudoso.
 
 ## Requisitos de esta fase
 
@@ -31,7 +31,7 @@ cd RagBasico.Api
 dotnet run
 ```
 
-Mandá los pedidos de `RagBasico.Api\RagBasico.Api.http` en orden: `POST /indexar` carga los PDF, `GET /buscar` muestra los fragmentos que encuentra, `POST /preguntar` responde con citas y `POST /evaluar` corre el examen.
+Mandá los pedidos de `RagBasico.Api\RagBasico.Api.http` en orden: `POST /indexar` pone la base al día con la carpeta (la segunda vez seguida dice `SIN CAMBIOS`), `GET /buscar` muestra los fragmentos que encuentra, `POST /preguntar` responde con citas y `POST /evaluar` corre el examen.
 
 El examen va en `examen.csv`, con el formato de `examen.ejemplo.csv`. Para congelar los PDF del examen: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-manifiesto.ps1`.
 
@@ -49,8 +49,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\controlar-docs.ps1
 | 1 | `fase-1-ollama` | El cliente HTTP de Ollama y `POST /preguntar`, sin documentos | 5081 | no usa | tokens por segundo: pendiente | [fase-1-ollama.md](docs/fases/fase-1-ollama.md) |
 | 2 | `fase-2-rag-minimo` | Carga de PDF en SQL Server, búsqueda por palabras y respuesta con citas | 5082 | `RagBasico_F2` | ms por respuesta: pendiente | [fase-2-rag-minimo.md](docs/fases/fase-2-rag-minimo.md) |
 | 3 | `fase-3-medicion` | El examen, el evaluador, el manifiesto de los PDF y el registro de consultas | 5083 | `RagBasico_F3` | "entre los 5" por palabras: pendiente | [fase-3-medicion.md](docs/fases/fase-3-medicion.md) |
+| 4 | `fase-4-carga` | Carga incremental con huella, borrado de lo que ya no está, corte por párrafos y aviso de escaneados | 5084 | `RagBasico_F4` | segunda carga "sin cambios" y "entre los 5": pendiente | [fase-4-carga.md](docs/fases/fase-4-carga.md) |
 
-Para ver qué agregó una fase: `git diff fase-2-rag-minimo fase-3-medicion`, o la página "compare" de GitHub entre las dos branches. En un clon nuevo, primero hay que traer las branches de fase: está en [docs/worktrees.md](docs/worktrees.md).
+Para ver qué agregó una fase: `git diff fase-3-medicion fase-4-carga`, o la página "compare" de GitHub entre las dos branches. En un clon nuevo, primero hay que traer las branches de fase: está en [docs/worktrees.md](docs/worktrees.md).
 
 ## Cómo recorrer las fases
 
