@@ -40,13 +40,14 @@ public sealed class Redactor
     public async Task<RespuestaRag> ResponderAsync(string pregunta, string modo, CancellationToken ct)
     {
         Stopwatch reloj = Stopwatch.StartNew();
-        List<Fragmento> fragmentos = await _buscador.BuscarAsync(pregunta, modo, _topK, ct);
+        ResultadoBusqueda busqueda = await _buscador.BuscarAsync(pregunta, modo, _topK, ct);
+        List<Fragmento> fragmentos = busqueda.Fragmentos;
         int msBusqueda = (int)reloj.ElapsedMilliseconds;
 
         RespuestaRag resultado;
         if (fragmentos.Count == 0)
         {
-            resultado = new RespuestaRag(SinRespuesta, new List<Fuente>(), msBusqueda, 0, 0, 0, 0);
+            resultado = new RespuestaRag(SinRespuesta, new List<Fuente>(), msBusqueda, 0, 0, 0, 0, busqueda.Aviso);
         }
         else
         {
@@ -66,7 +67,7 @@ public sealed class Redactor
                     fuentes.Add(new Fuente(i + 1, fragmentos[i].Archivo, fragmentos[i].FragmentoId));
                 }
             }
-            resultado = new RespuestaRag(texto, fuentes, msBusqueda, msModelo, respuesta.MsCarga, respuesta.MsLectura, respuesta.MsEscritura);
+            resultado = new RespuestaRag(texto, fuentes, msBusqueda, msModelo, respuesta.MsCarga, respuesta.MsLectura, respuesta.MsEscritura, busqueda.Aviso);
         }
 
         await RegistrarAsync(pregunta, modo, fragmentos, resultado);

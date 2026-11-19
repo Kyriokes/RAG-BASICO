@@ -10,14 +10,16 @@ public sealed class Evaluador
 {
     private readonly Buscador _buscador;
     private readonly Redactor _redactor;
+    private readonly Sincronizador _sincronizador;
     private readonly string _conexion;
     private readonly string _archivoExamen;
 
-    /// <summary>Recibe el buscador y el redactor, y lee de la configuración la conexión y la ruta del examen.</summary>
-    public Evaluador(Buscador buscador, Redactor redactor, IConfiguration config, IHostEnvironment entorno)
+    /// <summary>Recibe el buscador, el redactor y el sincronizador, para revisar Qdrant antes de medir, y lee de la configuración la conexión y la ruta del examen.</summary>
+    public Evaluador(Buscador buscador, Redactor redactor, Sincronizador sincronizador, IConfiguration config, IHostEnvironment entorno)
     {
         _buscador = buscador;
         _redactor = redactor;
+        _sincronizador = sincronizador;
         _conexion = config.GetConnectionString("Rag") ?? throw new InvalidOperationException("Falta ConnectionStrings:Rag en la configuración.");
         // La ruta del examen es relativa a la carpeta del proyecto: "..\examen.csv" es la raíz del repo.
         _archivoExamen = Path.GetFullPath(Path.Combine(entorno.ContentRootPath, config["Rag:ArchivoExamen"] ?? "..\\examen.csv"));
@@ -65,14 +67,41 @@ public sealed class Evaluador
             avisos.Add("Hay " + sinVector + " fragmentos sin vector: corré POST /vectores antes de evaluar, o la búsqueda por vectores sale baja.");
         }
 
+        // Sin Qdrant no se pueden medir los modos que lo usan, y la híbrida mediría otra cosa: el examen se corta.
+        try
+        {
+            EstadoQdrant estado = await _sincronizador.EstadoAsync(ct);
+            if (!estado.Iguales)
+            {
+                avisos.Add("Qdrant no está igual a SQL Server: " + estado.Mensaje);
+            }
+        }
+        catch (Exception ex)
+        {
+            if (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            avisos.Add("Qdrant no responde, así que el examen se cortó: los modos vectores-qdrant e hibrida lo necesitan. Arrancalo con scripts\\iniciar-qdrant.ps1. (" + ex.Message + ")");
+            return new InformeEvaluacion(resultados, detalle, fallas, avisos);
+        }
+
         foreach (string modo in Buscador.Modos)
         {
+            // Las búsquedas en las que la híbrida tuvo que seguir sin Qdrant: miden otra cosa, y se avisa.
+            int sinQdrant = 0;
+
             // 1. Las preguntas con respuesta, contra el buscador: en qué puesto aparece un documento correcto.
             List<DetallePregunta> delModo = new List<DetallePregunta>();
             foreach (PreguntaExamen pregunta in examen.Where(p => p.Documentos.Count > 0))
             {
                 Stopwatch reloj = Stopwatch.StartNew();
-                List<Fragmento> encontrados = await _buscador.BuscarAsync(pregunta.Pregunta, modo, 5, ct);
+                ResultadoBusqueda busqueda = await _buscador.BuscarAsync(pregunta.Pregunta, modo, 5, ct);
+                List<Fragmento> encontrados = busqueda.Fragmentos;
+                if (busqueda.Aviso != "")
+                {
+                    sinQdrant++;
+                }
                 int puesto = 0;
                 for (int i = 0; i < encontrados.Count && puesto == 0; i++)
                 {
@@ -98,6 +127,10 @@ public sealed class Evaluador
             {
                 sinRespuestaTotal++;
                 RespuestaRag respuesta = await _redactor.ResponderAsync(pregunta.Pregunta, modo, ct);
+                if (respuesta.Aviso != "")
+                {
+                    sinQdrant++;
+                }
                 if (Redactor.EsSinRespuesta(respuesta.Texto))
                 {
                     sinRespuestaCorrectas++;
@@ -106,6 +139,11 @@ public sealed class Evaluador
                 {
                     fallas.Add("[" + modo + ", sin respuesta] respondió algo en lugar de la frase fija: " + pregunta.Pregunta);
                 }
+            }
+
+            if (sinQdrant > 0)
+            {
+                avisos.Add("[" + modo + "] en " + sinQdrant + " búsquedas Qdrant no respondió y se usaron los vectores de SQL Server: esa fila no mide Qdrant.");
             }
 
             // "with" copia el resultado cambiando solo esos dos campos.

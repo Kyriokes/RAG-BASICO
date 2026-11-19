@@ -37,7 +37,7 @@ public sealed record InformeVectores(int Calculados, int Fallados, int Pendiente
 /// <summary>Una fuente de la respuesta: el número con que la cita el modelo, el archivo y el fragmento.</summary>
 public sealed record Fuente(int Numero, string Archivo, int FragmentoId);
 
-/// <summary>Lo que devuelve POST /preguntar: la respuesta, sus fuentes y lo que tardó cada parte.</summary>
+/// <summary>Lo que devuelve POST /preguntar: la respuesta, sus fuentes, lo que tardó cada parte y, si la búsqueda tuvo que seguir sin Qdrant, el aviso.</summary>
 public sealed record RespuestaRag(
     string Texto,
     List<Fuente> Fuentes,
@@ -45,7 +45,11 @@ public sealed record RespuestaRag(
     int MsModelo,
     int MsCarga,
     int MsLectura,
-    int MsEscritura);
+    int MsEscritura,
+    string Aviso);
+
+/// <summary>Lo que devuelve una búsqueda: los fragmentos y un aviso, vacío salvo que la híbrida haya tenido que seguir sin Qdrant.</summary>
+public sealed record ResultadoBusqueda(List<Fragmento> Fragmentos, string Aviso);
 
 /// <summary>Un punto para subir a Qdrant: el número de fragmento como id, su vector y el número de documento.</summary>
 public sealed record PuntoQdrant(int Id, float[] Vector, int DocumentoId);
