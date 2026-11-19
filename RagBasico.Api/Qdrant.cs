@@ -200,7 +200,7 @@ public sealed class Qdrant
             return;
         }
         string detalle = await respuesta.Content.ReadAsStringAsync(ct);
-        throw new InvalidOperationException("Qdrant respondió " + (int)respuesta.StatusCode + ": " + detalle);
+        throw new ErrorDeServicio("Qdrant", 502, "Qdrant respondió " + (int)respuesta.StatusCode + ": " + detalle, null);
     }
 
     /// <summary>Lee un número entero de un campo, o 0 si el campo no está o viene en null.</summary>

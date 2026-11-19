@@ -7,13 +7,13 @@ builder.Services.AddHttpClient<Ollama>(cliente =>
 {
     cliente.BaseAddress = new Uri(builder.Configuration["Ollama:Url"] ?? "http://127.0.0.1:11434");
     cliente.Timeout = TimeSpan.FromSeconds(builder.Configuration.GetValue("Ollama:SegundosDeEspera", 300));
-});
+}).AddHttpMessageHandler(() => new DetectorDeCaidas("Ollama"));
 // Qdrant también como cliente HTTP. El tiempo de espera es corto: si Qdrant no responde, la híbrida sigue con SQL.
 builder.Services.AddHttpClient<Qdrant>(cliente =>
 {
     cliente.BaseAddress = new Uri(builder.Configuration["Qdrant:Url"] ?? "http://127.0.0.1:6333");
     cliente.Timeout = TimeSpan.FromSeconds(builder.Configuration.GetValue("Qdrant:SegundosDeEspera", 10));
-});
+}).AddHttpMessageHandler(() => new DetectorDeCaidas("Qdrant"));
 // Un objeto nuevo de cada uno por pedido HTTP.
 builder.Services.AddScoped<Sincronizador>();
 builder.Services.AddScoped<Indexador>();
@@ -22,6 +22,9 @@ builder.Services.AddScoped<Buscador>();
 builder.Services.AddScoped<Redactor>();
 builder.Services.AddScoped<Evaluador>();
 builder.Services.AddScoped<Salud>();
+// Los errores salen como ProblemDetails: un JSON con título, detalle y código HTTP, en lugar de un 500 genérico.
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<ManejadorDeErrores>();
 
 var app = builder.Build();
 
@@ -57,6 +60,9 @@ app.Lifetime.ApplicationStarted.Register(() =>
         }
     });
 });
+
+// El manejador de errores va primero: atiende los errores de todo lo que viene después.
+app.UseExceptionHandler();
 
 // La página de la demo: wwwroot\index.html. UseDefaultFiles hace que "/" muestre index.html,
 // y UseStaticFiles sirve los archivos de wwwroot. Por eso la información del proyecto pasa a /info.

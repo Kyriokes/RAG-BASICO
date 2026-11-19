@@ -145,7 +145,7 @@ public sealed class Ollama
             return;
         }
         string detalle = await respuesta.Content.ReadAsStringAsync(ct);
-        throw new InvalidOperationException("Ollama respondió " + (int)respuesta.StatusCode + ": " + detalle);
+        throw new ErrorDeServicio("Ollama", 502, "Ollama respondió " + (int)respuesta.StatusCode + ": " + detalle, null);
     }
 
     /// <summary>Pasa un tiempo de Ollama, que viene en nanosegundos, a milisegundos.</summary>
