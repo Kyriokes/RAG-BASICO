@@ -8,6 +8,28 @@ SELECT COUNT(*) AS Fragmentos, AVG(LEN(Texto)) AS CaracteresPromedio FROM rag.Fr
 -- Tres fragmentos al azar: ¿el texto se entiende, o sale con palabras pegadas o columnas mezcladas?
 SELECT TOP (3) Texto FROM rag.Fragmento ORDER BY NEWID();
 
+-- Cada documento con su huella de carga y cuántos fragmentos tiene. Sin huella (NULL): se cargó antes de
+-- sql\03_huella.sql, y el próximo /indexar lo recarga.
+SELECT d.Archivo, CONVERT(VARCHAR(64), d.Huella, 2) AS Huella, d.FechaCarga, COUNT(f.FragmentoId) AS Fragmentos
+FROM rag.Documento AS d
+LEFT JOIN rag.Fragmento AS f ON f.DocumentoId = d.DocumentoId
+GROUP BY d.Archivo, d.Huella, d.FechaCarga
+ORDER BY d.Archivo;
+
+-- Los fragmentos de un documento, en orden: para revisar un PDF que /indexar marcó con TEXTO DUDOSO.
+SELECT f.Orden, LEN(f.Texto) AS Caracteres, f.Texto
+FROM rag.Fragmento AS f
+JOIN rag.Documento AS d ON d.DocumentoId = f.DocumentoId
+WHERE d.Archivo = N'nombre-del-archivo.pdf'
+ORDER BY f.Orden;
+
+-- Fragmentos de menos de 30 palabras (contando espacios): con el corte por párrafos casi no tendría que haber.
+SELECT TOP (20) d.Archivo, f.Orden, f.Texto
+FROM rag.Fragmento AS f
+JOIN rag.Documento AS d ON d.DocumentoId = f.DocumentoId
+WHERE LEN(f.Texto) - LEN(REPLACE(f.Texto, N' ', N'')) < 30
+ORDER BY d.Archivo, f.Orden;
+
 -- ¿Terminó el Full-Text de indexar? Pendientes = 0 y Estado = 0 quiere decir que sí.
 SELECT OBJECTPROPERTYEX(OBJECT_ID(N'rag.Fragmento'), 'TableFulltextPendingChanges') AS Pendientes,
        OBJECTPROPERTYEX(OBJECT_ID(N'rag.Fragmento'), 'TableFulltextPopulateStatus') AS Estado;

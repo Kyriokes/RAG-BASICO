@@ -15,8 +15,21 @@ public sealed record RespuestaModelo(
 /// <summary>Un fragmento encontrado por el buscador: su número, el archivo de donde salió y su texto.</summary>
 public sealed record Fragmento(int FragmentoId, string Archivo, string Texto);
 
-/// <summary>Lo que devuelve POST /indexar: cuántos documentos y fragmentos se cargaron, cuánto tardó y el detalle por archivo.</summary>
-public sealed record InformeIndexado(int Documentos, int Fragmentos, string Tiempo, List<string> Detalle);
+/// <summary>Lo que devuelve POST /indexar: cuántos PDF se cargaron, cuántos quedaron igual y cuántos se borraron, cuántos fragmentos se guardaron, cuánto tardó y el detalle.</summary>
+public sealed record InformeIndexado(int Cargados, int SinCambios, int Borrados, int Fragmentos, string Tiempo, List<string> Detalle);
+
+/// <summary>Un PDF de la carpeta con su huella de carga. La huella queda en null si el archivo no se pudo leer.</summary>
+public sealed record ArchivoEnCarpeta(string Archivo, string Ruta, byte[]? Huella);
+
+/// <summary>Un documento ya cargado en la base, con la huella con que se cargó. La huella es null si se cargó antes de que existiera la columna.</summary>
+public sealed record DocumentoCargado(int DocumentoId, string Archivo, byte[]? Huella);
+
+/// <summary>Qué hacer con cada PDF: cargar los nuevos y los cambiados, dejar los que siguen igual y borrar de la base los que ya no están en la carpeta.</summary>
+public sealed record PlanDeCarga(
+    List<ArchivoEnCarpeta> Nuevos,
+    List<ArchivoEnCarpeta> Cambiados,
+    List<ArchivoEnCarpeta> SinCambios,
+    List<DocumentoCargado> Borrar);
 
 /// <summary>Una fuente de la respuesta: el número con que la cita el modelo, el archivo y el fragmento.</summary>
 public sealed record Fuente(int Numero, string Archivo, int FragmentoId);

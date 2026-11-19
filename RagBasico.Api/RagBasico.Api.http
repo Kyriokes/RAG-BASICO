@@ -5,7 +5,8 @@
 ### Información del proyecto
 GET {{host}}/
 
-### Cargar los PDF de la carpeta en la base
+### Poner la base al día con la carpeta: carga los PDF nuevos y cambiados, y borra los que ya no están
+# La segunda vez seguida tiene que decir SIN CAMBIOS.
 POST {{host}}/indexar
 
 ### Buscar fragmentos por palabras
