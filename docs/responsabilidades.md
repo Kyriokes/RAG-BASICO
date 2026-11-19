@@ -1,6 +1,6 @@
 # Responsabilidades
 
-Qué hace cada archivo, clase, función y endpoint de esta versión, y quién lo usa. Esta es la versión de `fase-0-base`.
+Qué hace cada archivo, clase, función y endpoint de esta versión, y quién lo usa. Esta es la versión de `fase-1-ollama`.
 
 Cómo leerlo:
 
@@ -18,7 +18,9 @@ RAG-BASICO\
 ├─ .gitignore                      qué no se sube a git
 ├─ README.md                       portada: qué es y cómo correr esta fase
 ├─ RagBasico.Api\                  la API web
-│  ├─ Program.cs                   arranque y endpoints
+│  ├─ Modelos.cs                   records de pedidos y respuestas
+│  ├─ Ollama.cs                    cliente HTTP de Ollama
+│  ├─ Program.cs                   arranque, servicios y endpoints
 │  ├─ Properties\
 │  │  └─ launchSettings.json       dirección, puerto y forma de arrancar
 │  ├─ RagBasico.Api.csproj         el proyecto
@@ -29,7 +31,8 @@ RAG-BASICO\
 │  ├─ arquitectura.md              piezas, recorridos, tablas y configuración
 │  ├─ erratas.md                   bugs encontrados después de cerrar una fase
 │  ├─ fases\
-│  │  └─ fase-0-base.md            qué agregó esta fase
+│  │  ├─ fase-0-base.md            el esqueleto
+│  │  └─ fase-1-ollama.md          C# y HTTP contra Qwen
 │  ├─ responsabilidades.md         este documento
 │  └─ worktrees.md                 una carpeta por fase
 ├─ global.json                     versión del SDK de .NET
@@ -67,33 +70,103 @@ RAG-BASICO\
 
 - **Responsabilidad:** la portada del repo: qué es, qué hace falta para correr esta fase, cómo correrla, cómo recorrer las fases y la tabla de fases.
 - **Desde:** fase-0-base.
+- **Cambió en:** fase-1-ollama.
+
+## RagBasico.Api\Modelos.cs
+
+- **Responsabilidad:** los records que viajan entre las piezas: lo que llega en un pedido y lo que devuelve cada servicio. Un record es una clase chica de solo datos, que se compara por su contenido.
+- **Desde:** fase-1-ollama.
+- **Cambió en:** nada todavía.
+
+| Record | Campo | Tipo | Para qué |
+|---|---|---|---|
+| `PedidoPregunta` | `Pregunta` | `string` | La pregunta que llega en el cuerpo de `POST /preguntar` |
+| `RespuestaModelo` | `Texto` | `string` | Lo que escribió el modelo |
+| `RespuestaModelo` | `MsCarga` | `int` | Lo que tardó Ollama en cargar el modelo en memoria. Es 0 si ya estaba cargado |
+| `RespuestaModelo` | `MsLectura` | `int` | Lo que tardó el modelo en leer el pedido |
+| `RespuestaModelo` | `MsEscritura` | `int` | Lo que tardó en escribir la respuesta |
+| `RespuestaModelo` | `TokensPregunta` | `int` | Cuántos tokens leyó |
+| `RespuestaModelo` | `TokensRespuesta` | `int` | Cuántos tokens escribió |
+
+## RagBasico.Api\Ollama.cs
+
+- **Responsabilidad:** hablar con Ollama por HTTP. Manda el mismo JSON que se mandaría con Postman y devuelve lo que contesta el modelo.
+- **Contiene:** la clase `Ollama` y dos records privados para leer la respuesta de `/api/chat`: `RespuestaChat` (el mensaje y los tiempos) y `MensajeChat` (el texto que escribió el modelo).
+- **Desde:** fase-1-ollama.
+- **Cambió en:** nada todavía.
+
+### Clase Ollama
+
+- **Responsabilidad:** ser el único lugar del código que conoce el formato de la API de Ollama.
+- **Recibe en el constructor:** el `HttpClient` que arma Program.cs, con la dirección y el tiempo de espera de la configuración, y la configuración, de donde lee `Ollama:ModeloChat` y `Ollama:MantenerCargado`.
+- **La registra:** Program.cs, con `AddHttpClient<Ollama>`, que crea un cliente tipado nuevo en cada pedido.
+- **Desde:** fase-1-ollama.
+- **Cambió en:** nada todavía.
+
+### Ollama.ChatAsync(sistema, usuario, ct)
+
+- **Qué hace:** le pide una respuesta al modelo de chat. Manda `stream: false`, para recibir la respuesta entera de una vez, y `think: false`, porque qwen3.5 piensa antes de responder si no se le dice lo contrario. Si el texto trae un bloque de razonamiento, lo descarta.
+- **Recibe:** el mensaje de sistema (las reglas), el mensaje del usuario y el token de cancelación del pedido.
+- **Devuelve:** un `RespuestaModelo` con el texto y los tiempos que informa Ollama: carga del modelo, lectura de la pregunta y escritura de la respuesta, en milisegundos, y la cantidad de tokens leídos y escritos.
+- **Efectos:** un `POST /api/chat` a Ollama.
+- **La llaman:** el endpoint `POST /preguntar` de Program.cs.
+- **Desde:** fase-1-ollama.
+- **Cambió en:** nada todavía.
+
+### Ollama.VerificarAsync(respuesta, ct)
+
+- **Qué hace:** si Ollama contestó con un error, lanza una excepción con su mensaje real, por ejemplo "model not found", en lugar de un error genérico.
+- **Recibe:** la respuesta HTTP de Ollama y el token de cancelación.
+- **Devuelve:** nada. Si la respuesta es un error, lanza `InvalidOperationException`.
+- **Efectos:** lee el cuerpo de la respuesta cuando es un error.
+- **La llaman:** Ollama.ChatAsync.
+- **Desde:** fase-1-ollama.
+- **Cambió en:** nada todavía.
+
+### Ollama.NanosAMilisegundos(nanosegundos)
+
+- **Qué hace:** pasa un tiempo de Ollama, que viene en nanosegundos, a milisegundos.
+- **Recibe:** el tiempo en nanosegundos.
+- **Devuelve:** el tiempo en milisegundos, como número entero.
+- **Efectos:** ninguno.
+- **La llaman:** Ollama.ChatAsync.
+- **Desde:** fase-1-ollama.
 - **Cambió en:** nada todavía.
 
 ## RagBasico.Api\Program.cs
 
-- **Responsabilidad:** el punto de entrada de la API: arma la aplicación, declara los endpoints y la deja escuchando.
-- **Contiene:** instrucciones de nivel superior, sin clase: el compilador arma solo el método `Main`. Se lee en tres bloques:
-  - **Armado:** `WebApplication.CreateBuilder(args)` lee `appsettings.json`, las variables de entorno y los argumentos, y `builder.Build()` crea la aplicación. En esta fase no se registra ningún servicio propio.
-  - **Endpoints:** cada `app.MapGet(...)` asocia una ruta con la función que la atiende.
+- **Responsabilidad:** el punto de entrada de la API: arma la aplicación, registra los servicios, declara los endpoints y la deja escuchando.
+- **Contiene:** instrucciones de nivel superior, sin clase: el compilador arma solo el método `Main`. Se lee en cuatro bloques:
+  - **Armado:** `WebApplication.CreateBuilder(args)` lee `appsettings.json`, las variables de entorno y los argumentos.
+  - **Servicios:** `AddHttpClient<Ollama>` registra el cliente de Ollama con la dirección `Ollama:Url` y el tiempo de espera `Ollama:SegundosDeEspera`. Cuando un endpoint pide un `Ollama`, ASP.NET Core se lo crea: eso es la inyección de dependencias.
+  - **Endpoints:** cada `app.MapGet(...)` o `app.MapPost(...)` asocia una ruta con la función que la atiende.
   - **Arranque:** `app.Run()` deja la API escuchando en la dirección de `launchSettings.json` hasta que se la frena con Ctrl+C.
 - **Desde:** fase-0-base.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-1-ollama.
 
 ### GET /
 
 - **Recibe:** nada.
-- **Devuelve:** un JSON con el nombre del proyecto, la fase y la versión de .NET, por ejemplo `{ "proyecto": "RAG básico", "fase": "fase-0-base", "dotnet": ".NET 10.0.14" }`. El proyecto y la fase salen de la configuración (`Rag:Proyecto` y `Rag:Fase`).
+- **Devuelve:** un JSON con el nombre del proyecto, la fase y la versión de .NET, por ejemplo `{ "proyecto": "RAG básico", "fase": "fase-1-ollama", "dotnet": ".NET 10.0.15" }`. El proyecto y la fase salen de la configuración (`Rag:Proyecto` y `Rag:Fase`).
 - **La atiende:** una función sin nombre (lambda) declarada en `Program.cs` con `app.MapGet("/", ...)`.
 - **Desde:** fase-0-base.
+- **Cambió en:** nada todavía.
+
+### POST /preguntar
+
+- **Recibe:** un JSON con la pregunta, `{ "pregunta": "..." }`, que ASP.NET Core convierte en un `PedidoPregunta`.
+- **Devuelve:** `{ "texto", "msTotal", "msCarga", "msLectura", "msEscritura", "tokensPorSegundo" }`: la respuesta de Qwen y cuánto tardó cada parte. En esta fase Qwen responde con lo que sabe, sin documentos.
+- **La atiende:** una función sin nombre declarada en `Program.cs` con `app.MapPost("/preguntar", ...)`, que llama a Ollama.ChatAsync con una regla corta: responder en castellano y en pocas oraciones.
+- **Desde:** fase-1-ollama.
 - **Cambió en:** nada todavía.
 
 ## RagBasico.Api\Properties\launchSettings.json
 
 - **Responsabilidad:** dice cómo arranca la API cuando se la corre con `dotnet run` o con F5 en Visual Studio: la dirección, el puerto, el entorno y si abre el navegador.
-- **Contiene:** un solo perfil, `http`: escucha en `http://127.0.0.1:5080`, con el entorno `Development`, y abre el navegador. El template traía también un perfil `https` con puertos al azar, que se sacó porque chocaría entre fases.
-- **Por qué 127.0.0.1:** es la misma dirección que usan Ollama y Qdrant, que escuchan solo en IPv4, así todo el proyecto usa una sola. La consecuencia es que la API también escucha solo en IPv4: se la llama con `http://127.0.0.1:5080`, como hacen el archivo `.http` y el navegador que abre el perfil. Con `localhost`, los clientes de .NET (PowerShell, `WebClient`, `HttpClient`) prueban primero IPv6 y tardan unos 2 segundos más en conectarse.
+- **Contiene:** un solo perfil, `http`: escucha en `http://127.0.0.1:508N`, donde N es el número de la fase, con el entorno `Development`, y abre el navegador. Así dos fases pueden correr a la vez. El template traía también un perfil `https` con puertos al azar, que se sacó porque chocaría entre fases.
+- **Por qué 127.0.0.1:** es la misma dirección que usan Ollama y Qdrant, que escuchan solo en IPv4, así todo el proyecto usa una sola. La consecuencia es que la API también escucha solo en IPv4: se la llama con `http://127.0.0.1:508N`, como hacen el archivo `.http` y el navegador que abre el perfil. Con `localhost`, los clientes de .NET (PowerShell, `WebClient`, `HttpClient`) prueban primero IPv6 y tardan unos 2 segundos más en conectarse.
 - **Desde:** fase-0-base.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-1-ollama.
 
 ## RagBasico.Api\RagBasico.Api.csproj
 
@@ -105,15 +178,15 @@ RAG-BASICO\
 ## RagBasico.Api\RagBasico.Api.http
 
 - **Responsabilidad:** los pedidos de prueba de la fase, listos para mandar con "Send Request" desde Visual Studio, o desde VS Code con la extensión "REST Client".
-- **Contiene:** la variable `@host`, con la dirección y el puerto de la fase, y el pedido `GET /`.
+- **Contiene:** la variable `@host`, con la dirección y el puerto de la fase, y un pedido por cada endpoint de esta versión.
 - **Desde:** fase-0-base.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-1-ollama.
 
 ## RagBasico.Api\appsettings.json
 
 - **Responsabilidad:** la configuración de la API. Cada clave está explicada en `docs\arquitectura.md`.
 - **Desde:** fase-0-base.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-1-ollama.
 
 ## RagBasico.slnx
 
@@ -126,7 +199,7 @@ RAG-BASICO\
 
 - **Responsabilidad:** cómo se arma esta versión: las piezas, los recorridos paso a paso, las tablas, la configuración y lo que está fuera del repo.
 - **Desde:** fase-0-base.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-1-ollama.
 
 ## docs\erratas.md
 
@@ -140,11 +213,17 @@ RAG-BASICO\
 - **Desde:** fase-0-base.
 - **Cambió en:** nada todavía.
 
+## docs\fases\fase-1-ollama.md
+
+- **Responsabilidad:** qué agregó la fase 1, en qué orden leerla, cómo probarla, qué se midió y qué se decidió.
+- **Desde:** fase-1-ollama.
+- **Cambió en:** nada todavía.
+
 ## docs\responsabilidades.md
 
 - **Responsabilidad:** este documento: qué hace cada archivo, clase, función y endpoint, y quién lo usa.
 - **Desde:** fase-0-base.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-1-ollama.
 
 ## docs\worktrees.md
 

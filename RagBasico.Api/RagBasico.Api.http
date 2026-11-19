@@ -4,3 +4,9 @@
 
 ### Información del proyecto
 GET {{host}}/
+
+### Pregunta directa a Qwen, todavía sin documentos
+POST {{host}}/preguntar
+Content-Type: application/json
+
+{ "pregunta": "¿Qué es un RAG? Respondé en una oración." }
