@@ -10,6 +10,7 @@ builder.Services.AddHttpClient<Ollama>(cliente =>
 });
 // Un objeto nuevo de cada uno por pedido HTTP.
 builder.Services.AddScoped<Indexador>();
+builder.Services.AddScoped<Vectorizador>();
 builder.Services.AddScoped<Buscador>();
 builder.Services.AddScoped<Redactor>();
 builder.Services.AddScoped<Evaluador>();
@@ -40,11 +41,26 @@ app.MapPost("/indexar", async (Indexador indexador, CancellationToken ct) =>
 app.MapPost("/vectores", async (Vectorizador vectorizador, CancellationToken ct) =>
     await vectorizador.CalcularPendientesAsync(ct));
 
-app.MapGet("/buscar", async (string q, Buscador buscador, CancellationToken ct) =>
-    await buscador.PorPalabrasAsync(q, app.Configuration.GetValue("Rag:TopK", 5), ct));
+// Un modo mal escrito da un error 400 que lo dice, en lugar de buscar con otro modo sin avisar.
+app.MapGet("/buscar", async (string q, string? modo, Buscador buscador, CancellationToken ct) =>
+{
+    string? elegido = Buscador.ElegirModo(modo);
+    if (elegido == null)
+    {
+        return Results.BadRequest(new { error = "Modo desconocido: '" + modo + "'. Los modos son: " + string.Join(", ", Buscador.Modos) + "." });
+    }
+    return Results.Ok(await buscador.BuscarAsync(q, elegido, app.Configuration.GetValue("Rag:TopK", 5), ct));
+});
 
 app.MapPost("/preguntar", async (PedidoPregunta pedido, Redactor redactor, CancellationToken ct) =>
-    await redactor.ResponderAsync(pedido.Pregunta, ct));
+{
+    string? elegido = Buscador.ElegirModo(pedido.Modo);
+    if (elegido == null)
+    {
+        return Results.BadRequest(new { error = "Modo desconocido: '" + pedido.Modo + "'. Los modos son: " + string.Join(", ", Buscador.Modos) + "." });
+    }
+    return Results.Ok(await redactor.ResponderAsync(pedido.Pregunta, elegido, ct));
+});
 
 app.MapPost("/evaluar", async (Evaluador evaluador, CancellationToken ct) =>
     await evaluador.CorrerAsync(ct));

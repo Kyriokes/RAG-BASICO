@@ -36,12 +36,11 @@ public sealed class Redactor
         _topK = config.GetValue("Rag:TopK", 5);
     }
 
-    /// <summary>Busca los fragmentos de la pregunta y le pide la respuesta a Qwen. Si no encuentra fragmentos, no llama al modelo. Registra la consulta.</summary>
-    public async Task<RespuestaRag> ResponderAsync(string pregunta, CancellationToken ct)
+    /// <summary>Busca los fragmentos de la pregunta con el modo pedido y le pide la respuesta a Qwen. Si no encuentra fragmentos, no llama al modelo. Registra la consulta.</summary>
+    public async Task<RespuestaRag> ResponderAsync(string pregunta, string modo, CancellationToken ct)
     {
-        const string modo = "palabras";
         Stopwatch reloj = Stopwatch.StartNew();
-        List<Fragmento> fragmentos = await _buscador.PorPalabrasAsync(pregunta, _topK, ct);
+        List<Fragmento> fragmentos = await _buscador.BuscarAsync(pregunta, modo, _topK, ct);
         int msBusqueda = (int)reloj.ElapsedMilliseconds;
 
         RespuestaRag resultado;

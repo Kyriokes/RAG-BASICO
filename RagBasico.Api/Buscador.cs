@@ -3,15 +3,48 @@ using Microsoft.Data.SqlClient;
 
 namespace RagBasico.Api;
 
-/// <summary>Busca los fragmentos que mejor responden una pregunta.</summary>
+/// <summary>Busca los fragmentos que mejor responden una pregunta, por palabras o por significado.</summary>
 public sealed class Buscador
 {
+    /// <summary>Los modos de búsqueda que existen.</summary>
+    public static readonly string[] Modos = new string[] { "palabras", "vectores" };
+
+    /// <summary>El modo que se usa cuando el pedido no dice cuál.</summary>
+    public const string ModoPorDefecto = "palabras";
+
+    private readonly Ollama _ollama;
     private readonly string _conexion;
 
-    /// <summary>Lee la cadena de conexión de la configuración.</summary>
-    public Buscador(IConfiguration config)
+    /// <summary>Recibe el cliente de Ollama, para el vector de la pregunta, y lee la cadena de conexión de la configuración.</summary>
+    public Buscador(Ollama ollama, IConfiguration config)
     {
+        _ollama = ollama;
         _conexion = config.GetConnectionString("Rag") ?? throw new InvalidOperationException("Falta ConnectionStrings:Rag en la configuración.");
+    }
+
+    /// <summary>Devuelve el modo pedido en minúsculas, o el modo por defecto si el pedido no dice ninguno. Si el modo no existe, devuelve null: así quien llama da un error en lugar de buscar con otro modo sin avisar.</summary>
+    public static string? ElegirModo(string? pedido)
+    {
+        if (string.IsNullOrWhiteSpace(pedido))
+        {
+            return ModoPorDefecto;
+        }
+        string modo = pedido.Trim().ToLowerInvariant();
+        return Modos.Contains(modo) ? modo : null;
+    }
+
+    /// <summary>Busca con el modo pedido, que tiene que ser uno de Modos.</summary>
+    public async Task<List<Fragmento>> BuscarAsync(string pregunta, string modo, int topK, CancellationToken ct)
+    {
+        if (modo == "palabras")
+        {
+            return await PorPalabrasAsync(pregunta, topK, ct);
+        }
+        if (modo == "vectores")
+        {
+            return await PorVectoresAsync(pregunta, topK, ct);
+        }
+        throw new ArgumentException("Modo desconocido: '" + modo + "'. Los modos son: " + string.Join(", ", Modos) + ".");
     }
 
     /// <summary>Busca en el Full-Text de SQL Server los fragmentos que mejor coinciden con las palabras de la pregunta, del más relevante al menos relevante.</summary>
@@ -33,6 +66,32 @@ ORDER BY ft.[RANK] DESC;";
         {
             IEnumerable<Fragmento> filas = await conexion.QueryAsync<Fragmento>(
                 new CommandDefinition(sql, new { pregunta, topK }, cancellationToken: ct));
+            return filas.ToList();
+        }
+    }
+
+    /// <summary>Busca los fragmentos más parecidos en significado a la pregunta: calcula su vector con Ollama, y SQL Server ordena los fragmentos por distancia coseno, del más cercano al más lejano.</summary>
+    public async Task<List<Fragmento>> PorVectoresAsync(string pregunta, int topK, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(pregunta))
+        {
+            return new List<Fragmento>();
+        }
+        float[] vector = await _ollama.EmbeddingPreguntaAsync(pregunta, ct);
+
+        // VECTOR_DISTANCE compara el vector de la pregunta con el de cada fragmento: 0 es el mismo sentido y 2 el opuesto.
+        // Es una búsqueda exacta: recorre todos los fragmentos que tienen vector, así que tarda más cuantos más haya.
+        const string sql = @"
+DECLARE @vectorPregunta VECTOR(1024) = CAST(@vector AS VECTOR(1024));
+SELECT TOP (@topK) f.FragmentoId, d.Archivo, f.Texto
+FROM rag.Fragmento AS f
+JOIN rag.Documento AS d ON d.DocumentoId = f.DocumentoId
+WHERE f.Embedding IS NOT NULL
+ORDER BY VECTOR_DISTANCE('cosine', f.Embedding, @vectorPregunta);";
+        using (SqlConnection conexion = new SqlConnection(_conexion))
+        {
+            IEnumerable<Fragmento> filas = await conexion.QueryAsync<Fragmento>(
+                new CommandDefinition(sql, new { vector = Vectorizador.ComoJson(vector), topK }, cancellationToken: ct));
             return filas.ToList();
         }
     }

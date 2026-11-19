@@ -1,7 +1,7 @@
 namespace RagBasico.Api;
 
-/// <summary>Lo que se manda a POST /preguntar.</summary>
-public sealed record PedidoPregunta(string Pregunta);
+/// <summary>Lo que se manda a POST /preguntar: la pregunta y, si se quiere, el modo de búsqueda.</summary>
+public sealed record PedidoPregunta(string Pregunta, string? Modo);
 
 /// <summary>Lo que devuelve el modelo de chat: el texto y los tiempos que informa Ollama.</summary>
 public sealed record RespuestaModelo(
@@ -53,14 +53,19 @@ public sealed record PreguntaExamen(string Pregunta, List<string> Documentos);
 /// <summary>Cómo le fue a una pregunta del examen en un modo de búsqueda: en qué puesto apareció un documento correcto (0 si no apareció) y cuánto tardó.</summary>
 public sealed record DetallePregunta(string Pregunta, string Modo, int Puesto, int Ms);
 
-/// <summary>El resultado de un modo de búsqueda en todo el examen.</summary>
-public sealed record ResultadoModo(string Modo, int Preguntas, int PrimerLugar, int EntreLosCinco, int MsPromedio);
+/// <summary>El resultado de un modo de búsqueda en todo el examen, también con las preguntas sin respuesta.</summary>
+public sealed record ResultadoModo(
+    string Modo,
+    int Preguntas,
+    int PrimerLugar,
+    int EntreLosCinco,
+    int MsPromedio,
+    int SinRespuestaCorrectas,
+    int SinRespuestaTotal);
 
 /// <summary>Lo que devuelve POST /evaluar.</summary>
 public sealed record InformeEvaluacion(
     List<ResultadoModo> Resultados,
-    int SinRespuestaCorrectas,
-    int SinRespuestaTotal,
     List<DetallePregunta> Detalle,
     List<string> Fallas,
     List<string> Avisos);

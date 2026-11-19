@@ -5,11 +5,9 @@ using Microsoft.Data.SqlClient;
 
 namespace RagBasico.Api;
 
-/// <summary>Corre el examen: cada pregunta contra el buscador, y las preguntas sin respuesta contra el redactor.</summary>
+/// <summary>Corre el examen en cada modo de búsqueda: cada pregunta contra el buscador, y las preguntas sin respuesta contra el redactor.</summary>
 public sealed class Evaluador
 {
-    private static readonly string[] Modos = new string[] { "palabras" };
-
     private readonly Buscador _buscador;
     private readonly Redactor _redactor;
     private readonly string _conexion;
@@ -25,7 +23,7 @@ public sealed class Evaluador
         _archivoExamen = Path.GetFullPath(Path.Combine(entorno.ContentRootPath, config["Rag:ArchivoExamen"] ?? "..\\examen.csv"));
     }
 
-    /// <summary>Corre el examen completo y devuelve la tabla por modo, el detalle por pregunta, las fallas y los avisos.</summary>
+    /// <summary>Corre el examen completo en cada modo y devuelve la tabla por modo, el detalle por pregunta, las fallas y los avisos.</summary>
     public async Task<InformeEvaluacion> CorrerAsync(CancellationToken ct)
     {
         List<string> avisos = new List<string>();
@@ -36,13 +34,13 @@ public sealed class Evaluador
         if (!File.Exists(_archivoExamen))
         {
             avisos.Add("No existe el examen '" + _archivoExamen + "'. Revisá Rag:ArchivoExamen.");
-            return new InformeEvaluacion(resultados, 0, 0, detalle, fallas, avisos);
+            return new InformeEvaluacion(resultados, detalle, fallas, avisos);
         }
         List<PreguntaExamen> examen = LeerExamen(_archivoExamen);
         if (examen.Count == 0)
         {
             avisos.Add("El examen no tiene preguntas. Escribilas en " + _archivoExamen + " siguiendo examen.ejemplo.csv.");
-            return new InformeEvaluacion(resultados, 0, 0, detalle, fallas, avisos);
+            return new InformeEvaluacion(resultados, detalle, fallas, avisos);
         }
 
         HashSet<string> cargados = await LeerDocumentosCargadosAsync(ct);
@@ -61,15 +59,20 @@ public sealed class Evaluador
         {
             avisos.Add("El Full-Text todavía tiene " + pendientes + " cambios pendientes: la búsqueda por palabras puede salir baja.");
         }
-
-        // 1. Las preguntas con respuesta, contra el buscador, en cada modo.
-        foreach (string modo in Modos)
+        int sinVector = await ContarSinVectorAsync(ct);
+        if (sinVector > 0)
         {
+            avisos.Add("Hay " + sinVector + " fragmentos sin vector: corré POST /vectores antes de evaluar, o la búsqueda por vectores sale baja.");
+        }
+
+        foreach (string modo in Buscador.Modos)
+        {
+            // 1. Las preguntas con respuesta, contra el buscador: en qué puesto aparece un documento correcto.
             List<DetallePregunta> delModo = new List<DetallePregunta>();
             foreach (PreguntaExamen pregunta in examen.Where(p => p.Documentos.Count > 0))
             {
                 Stopwatch reloj = Stopwatch.StartNew();
-                List<Fragmento> encontrados = await _buscador.PorPalabrasAsync(pregunta.Pregunta, 5, ct);
+                List<Fragmento> encontrados = await _buscador.BuscarAsync(pregunta.Pregunta, modo, 5, ct);
                 int puesto = 0;
                 for (int i = 0; i < encontrados.Count && puesto == 0; i++)
                 {
@@ -86,36 +89,39 @@ public sealed class Evaluador
                 }
             }
             detalle.AddRange(delModo);
-            resultados.Add(Puntuar(modo, delModo));
+
+            // 2. Las preguntas sin respuesta, contra el redactor con el mismo modo: tiene que decir la frase fija.
+            // Por vectores la búsqueda casi nunca vuelve vacía, así que el "no sé" lo decide Qwen: por eso se mide en cada modo.
+            int sinRespuestaTotal = 0;
+            int sinRespuestaCorrectas = 0;
+            foreach (PreguntaExamen pregunta in examen.Where(p => p.Documentos.Count == 0))
+            {
+                sinRespuestaTotal++;
+                RespuestaRag respuesta = await _redactor.ResponderAsync(pregunta.Pregunta, modo, ct);
+                if (Redactor.EsSinRespuesta(respuesta.Texto))
+                {
+                    sinRespuestaCorrectas++;
+                }
+                else
+                {
+                    fallas.Add("[" + modo + ", sin respuesta] respondió algo en lugar de la frase fija: " + pregunta.Pregunta);
+                }
+            }
+
+            // "with" copia el resultado cambiando solo esos dos campos.
+            resultados.Add(Puntuar(modo, delModo) with { SinRespuestaCorrectas = sinRespuestaCorrectas, SinRespuestaTotal = sinRespuestaTotal });
         }
 
-        // 2. Las preguntas sin respuesta, contra el redactor: tiene que decir la frase fija.
-        int sinRespuestaTotal = 0;
-        int sinRespuestaCorrectas = 0;
-        foreach (PreguntaExamen pregunta in examen.Where(p => p.Documentos.Count == 0))
-        {
-            sinRespuestaTotal++;
-            RespuestaRag respuesta = await _redactor.ResponderAsync(pregunta.Pregunta, ct);
-            if (Redactor.EsSinRespuesta(respuesta.Texto))
-            {
-                sinRespuestaCorrectas++;
-            }
-            else
-            {
-                fallas.Add("[sin respuesta] respondió algo en lugar de la frase fija: " + pregunta.Pregunta);
-            }
-        }
-
-        return new InformeEvaluacion(resultados, sinRespuestaCorrectas, sinRespuestaTotal, detalle, fallas, avisos);
+        return new InformeEvaluacion(resultados, detalle, fallas, avisos);
     }
 
-    /// <summary>Resume un modo: cuántas preguntas tuvieron un documento correcto en el primer lugar, cuántas entre los 5 primeros, y el tiempo promedio.</summary>
+    /// <summary>Resume un modo: cuántas preguntas tuvieron un documento correcto en el primer lugar, cuántas entre los 5 primeros, y el tiempo promedio. Las preguntas sin respuesta quedan en 0; las completa CorrerAsync.</summary>
     public static ResultadoModo Puntuar(string modo, List<DetallePregunta> detalle)
     {
         int primerLugar = detalle.Count(d => d.Puesto == 1);
         int entreLosCinco = detalle.Count(d => d.Puesto >= 1 && d.Puesto <= 5);
         int msPromedio = detalle.Count == 0 ? 0 : (int)detalle.Average(d => d.Ms);
-        return new ResultadoModo(modo, detalle.Count, primerLugar, entreLosCinco, msPromedio);
+        return new ResultadoModo(modo, detalle.Count, primerLugar, entreLosCinco, msPromedio, 0, 0);
     }
 
     /// <summary>Lee el examen: una pregunta por línea, "pregunta;documento". Acepta UTF-8 o la codificación de Excel, punto y coma adentro de una pregunta entre comillas, y varios documentos separados con "|". "ninguno" marca una pregunta sin respuesta.</summary>
@@ -218,6 +224,16 @@ public sealed class Evaluador
                 cargados.Add(archivo.Normalize(NormalizationForm.FormC));
             }
             return cargados;
+        }
+    }
+
+    /// <summary>Cuenta los fragmentos que todavía no tienen vector.</summary>
+    private async Task<int> ContarSinVectorAsync(CancellationToken ct)
+    {
+        using (SqlConnection conexion = new SqlConnection(_conexion))
+        {
+            return await conexion.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM rag.Fragmento WHERE Embedding IS NULL;", cancellationToken: ct));
         }
     }
 
