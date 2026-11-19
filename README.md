@@ -4,11 +4,12 @@ Un prototipo de RAG (búsqueda en documentos y respuesta redactada por un modelo
 
 Cada fase agrega una pieza y queda marcada con su branch, así el proyecto se puede recorrer de la versión más chica a la final.
 
-**Esta es la fase 0, el esqueleto:** la configuración del repo, una API vacía que contesta `GET /`, la documentación y los scripts. Todavía no busca ni responde nada.
+**Esta es la fase 1: C# y HTTP contra Qwen.** La API le pasa una pregunta a Qwen, el modelo de lenguaje que corre en Ollama, y devuelve la respuesta con lo que tardó cada parte. Todavía no usa documentos.
 
 ## Requisitos de esta fase
 
 - SDK de .NET 10. En la carpeta del repo, `dotnet --version` tiene que decir 10.0.403 o un parche más nuevo de 10.0.4xx (lo fija `global.json`).
+- Ollama corriendo, con el modelo `qwen3.5:4b` (`ollama pull qwen3.5:4b`).
 - Windows PowerShell 5.1, para los scripts.
 - Para probar los pedidos del archivo `.http`: Visual Studio, o VS Code con la extensión "REST Client".
 
@@ -19,7 +20,7 @@ cd RagBasico.Api
 dotnet run
 ```
 
-Abrí `http://127.0.0.1:5080/` en el navegador, o mandá el pedido de `RagBasico.Api\RagBasico.Api.http`. Tiene que devolver el nombre del proyecto, la fase y la versión de .NET.
+Mandá el pedido `POST /preguntar` de `RagBasico.Api\RagBasico.Api.http`. Tiene que devolver la respuesta de Qwen y los tiempos: carga del modelo, lectura de la pregunta y escritura de la respuesta.
 
 Para controlar que la documentación coincida con el código, desde la raíz del repo:
 
@@ -32,6 +33,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\controlar-docs.ps1
 | Fase | Branch | Qué agrega | Puerto | Base | Número principal | Detalle |
 |---|---|---|---|---|---|---|
 | 0 | `fase-0-base` | El esqueleto: configuración del repo, API vacía, documentación y scripts | 5080 | no usa | ninguno | [fase-0-base.md](docs/fases/fase-0-base.md) |
+| 1 | `fase-1-ollama` | El cliente HTTP de Ollama y `POST /preguntar`, sin documentos | 5081 | no usa | tokens por segundo: pendiente | [fase-1-ollama.md](docs/fases/fase-1-ollama.md) |
 
 Para ver qué agregó una fase: `git diff fase-0-base fase-1-ollama`, o la página "compare" de GitHub entre las dos branches. En un clon nuevo, primero hay que traer las branches de fase: está en [docs/worktrees.md](docs/worktrees.md).
 
