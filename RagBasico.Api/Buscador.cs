@@ -15,6 +15,9 @@ public sealed class Buscador
     /// <summary>El aviso que acompaña a la búsqueda cuando Qdrant no respondió y la híbrida usó los vectores de SQL.</summary>
     public const string AvisoSinQdrant = "Qdrant no respondió: la búsqueda por significado usó los vectores de SQL Server.";
 
+    /// <summary>El aviso que acompaña a la búsqueda cuando la colección de Qdrant no tiene vectores y la híbrida usó los de SQL.</summary>
+    public const string AvisoQdrantVacio = "La colección de Qdrant no tiene vectores: la búsqueda por significado usó los de SQL Server. POST /vectores los sube.";
+
     private readonly Ollama _ollama;
     private readonly Qdrant _qdrant;
     private readonly ILogger<Buscador> _log;
@@ -121,10 +124,15 @@ ORDER BY ft.[RANK] DESC;";
         }
         float[] vector = await _ollama.EmbeddingPreguntaAsync(pregunta, ct);
         List<int> ids = await _qdrant.BuscarAsync(vector, topK, ct);
+        if (ids.Count == 0)
+        {
+            // Si la colección tiene puntos, Qdrant siempre devuelve alguno. Vacía, cada pregunta diría "no encontré" sin explicar por qué.
+            throw new InvalidOperationException("La colección " + _qdrant.Coleccion + " de Qdrant no tiene vectores: corré POST /vectores, que se los sube.");
+        }
         return await LeerFragmentosAsync(ids, ct);
     }
 
-    /// <summary>La parte por significado de la híbrida: busca en Qdrant y, si Qdrant no responde, busca con los vectores de SQL Server y devuelve el aviso. El vector de la pregunta se calcula una sola vez.</summary>
+    /// <summary>La parte por significado de la híbrida: busca en Qdrant y, si Qdrant no responde o no tiene vectores, busca con los vectores de SQL Server y devuelve el aviso. El vector de la pregunta se calcula una sola vez.</summary>
     private async Task<ResultadoBusqueda> VectoresConRespaldoAsync(string pregunta, int topK, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(pregunta))
@@ -151,6 +159,11 @@ ORDER BY ft.[RANK] DESC;";
         if (ids == null)
         {
             return new ResultadoBusqueda(await CercanosEnSqlAsync(vector, topK, ct), AvisoSinQdrant);
+        }
+        // Una colección vacía responde, pero sin nada: la híbrida quedaría solo con las palabras sin avisar.
+        if (ids.Count == 0)
+        {
+            return new ResultadoBusqueda(await CercanosEnSqlAsync(vector, topK, ct), AvisoQdrantVacio);
         }
         return new ResultadoBusqueda(await LeerFragmentosAsync(ids, ct), "");
     }

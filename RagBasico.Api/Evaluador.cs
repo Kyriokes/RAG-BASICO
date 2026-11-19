@@ -68,9 +68,16 @@ public sealed class Evaluador
         }
 
         // Sin Qdrant no se pueden medir los modos que lo usan, y la híbrida mediría otra cosa: el examen se corta.
+        // También si Qdrant responde pero no sirve para medir: sin la colección, vacía o con vectores de otra base.
         try
         {
             EstadoQdrant estado = await _sincronizador.EstadoAsync(ct);
+            bool sinVectores = estado.PuntosEnQdrant == 0 && estado.ConVectorEnSql > 0;
+            if (estado.EstadoColeccion == "no existe" || sinVectores || estado.MuestraCoincide == false)
+            {
+                avisos.Add("El examen se cortó: Qdrant no sirve para medir. " + estado.Mensaje);
+                return new InformeEvaluacion(resultados, detalle, fallas, avisos);
+            }
             if (!estado.Iguales)
             {
                 avisos.Add("Qdrant no está igual a SQL Server: " + estado.Mensaje);
@@ -88,72 +95,94 @@ public sealed class Evaluador
 
         foreach (string modo in Buscador.Modos)
         {
-            // Las búsquedas en las que la híbrida tuvo que seguir sin Qdrant: miden otra cosa, y se avisa.
-            int sinQdrant = 0;
-
-            // 1. Las preguntas con respuesta, contra el buscador: en qué puesto aparece un documento correcto.
-            List<DetallePregunta> delModo = new List<DetallePregunta>();
-            foreach (PreguntaExamen pregunta in examen.Where(p => p.Documentos.Count > 0))
+            // Cada modo junta su detalle y sus fallas aparte: si un modo falla a la mitad, se avisa y los demás se miden igual.
+            List<DetallePregunta> detalleDelModo = new List<DetallePregunta>();
+            List<string> fallasDelModo = new List<string>();
+            try
             {
-                Stopwatch reloj = Stopwatch.StartNew();
-                ResultadoBusqueda busqueda = await _buscador.BuscarAsync(pregunta.Pregunta, modo, 5, ct);
-                List<Fragmento> encontrados = busqueda.Fragmentos;
-                if (busqueda.Aviso != "")
-                {
-                    sinQdrant++;
-                }
-                int puesto = 0;
-                for (int i = 0; i < encontrados.Count && puesto == 0; i++)
-                {
-                    if (pregunta.Documentos.Contains(encontrados[i].Archivo, StringComparer.OrdinalIgnoreCase))
-                    {
-                        puesto = i + 1;
-                    }
-                }
-                DetallePregunta d = new DetallePregunta(pregunta.Pregunta, modo, puesto, (int)reloj.ElapsedMilliseconds);
-                delModo.Add(d);
-                if (puesto == 0)
-                {
-                    fallas.Add("[" + modo + "] no encontró: " + pregunta.Pregunta);
-                }
+                resultados.Add(await CorrerModoAsync(modo, examen, detalleDelModo, fallasDelModo, avisos, ct));
+                detalle.AddRange(detalleDelModo);
+                fallas.AddRange(fallasDelModo);
             }
-            detalle.AddRange(delModo);
-
-            // 2. Las preguntas sin respuesta, contra el redactor con el mismo modo: tiene que decir la frase fija.
-            // Por vectores la búsqueda casi nunca vuelve vacía, así que el "no sé" lo decide Qwen: por eso se mide en cada modo.
-            int sinRespuestaTotal = 0;
-            int sinRespuestaCorrectas = 0;
-            foreach (PreguntaExamen pregunta in examen.Where(p => p.Documentos.Count == 0))
+            catch (Exception ex)
             {
-                sinRespuestaTotal++;
-                RespuestaRag respuesta = await _redactor.ResponderAsync(pregunta.Pregunta, modo, ct);
-                if (respuesta.Aviso != "")
+                if (ct.IsCancellationRequested)
                 {
-                    sinQdrant++;
+                    throw;
                 }
-                if (Redactor.EsSinRespuesta(respuesta.Texto))
-                {
-                    sinRespuestaCorrectas++;
-                }
-                else
-                {
-                    fallas.Add("[" + modo + ", sin respuesta] respondió algo en lugar de la frase fija: " + pregunta.Pregunta);
-                }
+                avisos.Add("[" + modo + "] se cortó por un error y no está en la tabla: " + ex.Message);
             }
-
-            if (sinQdrant > 0)
-            {
-                avisos.Add("[" + modo + "] en " + sinQdrant + " búsquedas Qdrant no respondió y se usaron los vectores de SQL Server: esa fila no mide Qdrant.");
-            }
-
-            // "with" copia el resultado cambiando solo esos dos campos.
-            resultados.Add(Puntuar(modo, delModo) with { SinRespuestaCorrectas = sinRespuestaCorrectas, SinRespuestaTotal = sinRespuestaTotal });
         }
 
         return new InformeEvaluacion(resultados, detalle, fallas, avisos);
     }
 
-    /// <summary>Resume un modo: cuántas preguntas tuvieron un documento correcto en el primer lugar, cuántas entre los 5 primeros, y el tiempo promedio. Las preguntas sin respuesta quedan en 0; las completa CorrerAsync.</summary>
+    /// <summary>Corre el examen en un modo: el puesto de cada pregunta con respuesta y la frase fija en las preguntas sin respuesta. Anota en las listas que recibe el detalle, las fallas y los avisos.</summary>
+    private async Task<ResultadoModo> CorrerModoAsync(string modo, List<PreguntaExamen> examen, List<DetallePregunta> detalle, List<string> fallas, List<string> avisos, CancellationToken ct)
+    {
+        // Las búsquedas en las que la híbrida tuvo que seguir sin Qdrant: miden otra cosa, y se avisa.
+        int sinQdrant = 0;
+
+        // 1. Las preguntas con respuesta, contra el buscador: en qué puesto aparece un documento correcto.
+        List<DetallePregunta> delModo = new List<DetallePregunta>();
+        foreach (PreguntaExamen pregunta in examen.Where(p => p.Documentos.Count > 0))
+        {
+            Stopwatch reloj = Stopwatch.StartNew();
+            ResultadoBusqueda busqueda = await _buscador.BuscarAsync(pregunta.Pregunta, modo, 5, ct);
+            List<Fragmento> encontrados = busqueda.Fragmentos;
+            if (busqueda.Aviso != "")
+            {
+                sinQdrant++;
+            }
+            int puesto = 0;
+            for (int i = 0; i < encontrados.Count && puesto == 0; i++)
+            {
+                if (pregunta.Documentos.Contains(encontrados[i].Archivo, StringComparer.OrdinalIgnoreCase))
+                {
+                    puesto = i + 1;
+                }
+            }
+            DetallePregunta d = new DetallePregunta(pregunta.Pregunta, modo, puesto, (int)reloj.ElapsedMilliseconds);
+            delModo.Add(d);
+            if (puesto == 0)
+            {
+                fallas.Add("[" + modo + "] no encontró: " + pregunta.Pregunta);
+            }
+        }
+        detalle.AddRange(delModo);
+
+        // 2. Las preguntas sin respuesta, contra el redactor con el mismo modo: tiene que decir la frase fija.
+        // Por vectores la búsqueda casi nunca vuelve vacía, así que el "no sé" lo decide Qwen: por eso se mide en cada modo.
+        int sinRespuestaTotal = 0;
+        int sinRespuestaCorrectas = 0;
+        foreach (PreguntaExamen pregunta in examen.Where(p => p.Documentos.Count == 0))
+        {
+            sinRespuestaTotal++;
+            RespuestaRag respuesta = await _redactor.ResponderAsync(pregunta.Pregunta, modo, ct);
+            if (respuesta.Aviso != "")
+            {
+                sinQdrant++;
+            }
+            if (Redactor.EsSinRespuesta(respuesta.Texto))
+            {
+                sinRespuestaCorrectas++;
+            }
+            else
+            {
+                fallas.Add("[" + modo + ", sin respuesta] respondió algo en lugar de la frase fija: " + pregunta.Pregunta);
+            }
+        }
+
+        if (sinQdrant > 0)
+        {
+            avisos.Add("[" + modo + "] en " + sinQdrant + " búsquedas la híbrida no pudo usar Qdrant y usó los vectores de SQL Server: esa fila no mide Qdrant.");
+        }
+
+        // "with" copia el resultado cambiando solo esos dos campos.
+        return Puntuar(modo, delModo) with { SinRespuestaCorrectas = sinRespuestaCorrectas, SinRespuestaTotal = sinRespuestaTotal };
+    }
+
+    /// <summary>Resume un modo: cuántas preguntas tuvieron un documento correcto en el primer lugar, cuántas entre los 5 primeros, y el tiempo promedio. Las preguntas sin respuesta quedan en 0; las completa CorrerModoAsync.</summary>
     public static ResultadoModo Puntuar(string modo, List<DetallePregunta> detalle)
     {
         int primerLugar = detalle.Count(d => d.Puesto == 1);

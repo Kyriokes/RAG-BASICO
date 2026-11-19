@@ -126,7 +126,8 @@ public sealed class Sincronizador
             {
                 throw;
             }
-            detalle.Add("AVISO: Qdrant no respondió y quedó sin actualizar (" + ex.Message + "). Cuando vuelva, POST /vectores lo pone al día.");
+            // El tipo de error dice dónde falló: HttpRequestException es Qdrant que no responde, SqlException es SQL Server.
+            detalle.Add("AVISO: no se pudo poner Qdrant al día (" + ex.GetType().Name + ": " + ex.Message + "). Cuando se arregle, POST /vectores lo pone al día.");
         }
     }
 

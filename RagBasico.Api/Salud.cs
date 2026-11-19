@@ -176,6 +176,10 @@ public sealed class Salud
                 return new Chequeo(nombre, "aviso", "Versión " + version + ", pero no existe la colección " + _qdrant.Coleccion + ": corré POST /qdrant/reconstruir.");
             }
             InfoColeccion info = await _qdrant.LeerInfoAsync(ct);
+            if (info.Puntos == 0)
+            {
+                return new Chequeo(nombre, "aviso", "Versión " + version + ", pero la colección " + _qdrant.Coleccion + " está vacía: corré POST /vectores, que le sube los vectores.");
+            }
             return new Chequeo(nombre, "ok", "Versión " + version + ". Colección " + _qdrant.Coleccion + ": " + info.Puntos + " puntos, " + info.VectoresIndexados + " en el índice HNSW.");
         }
         catch (Exception ex)
