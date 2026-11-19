@@ -1,41 +1,62 @@
 # Arquitectura
 
-Cómo se arma esta versión, `fase-1-ollama`. Cada fase actualiza este documento, así que en la carpeta de cada fase describe esa fase.
+Cómo se arma esta versión, `fase-2-rag-minimo`. Cada fase actualiza este documento, así que en la carpeta de cada fase describe esa fase.
 
 ## 1. Piezas
 
-Dos: la API web `RagBasico.Api`, hecha con ASP.NET Core sobre .NET 10, y Ollama, que corre el modelo de lenguaje `qwen3.5:4b` en tu PC.
+Tres: la API web `RagBasico.Api`, SQL Server, que guarda los documentos, los fragmentos y el índice Full-Text, y Ollama, que corre el modelo `qwen3.5:4b`.
 
 ```text
-Navegador o archivo .http  ──HTTP──►  RagBasico.Api  ──HTTP──►  Ollama (qwen3.5:4b)
-                                     127.0.0.1:5081            127.0.0.1:11434
+                                          ┌──►  SQL Server 2025 Express (localhost\SQLEXPRESS, base RagBasico_F2)
+Navegador o .http ──HTTP──► RagBasico.Api ┤
+                            127.0.0.1:5082 └──►  Ollama (qwen3.5:4b, 127.0.0.1:11434)
+                                  ▲
+                                  └── lee los PDF de la carpeta Rag:CarpetaDocumentos
 ```
 
-Todavía no hay base de datos ni Qdrant. Llegan en las fases 2 y 7.
+Todavía no hay vectores ni Qdrant. Llegan en las fases 5 y 7.
 
 ## 2. Recorridos
 
-**Arrancar la API** (`dotnet run` en `RagBasico.Api`, o F5 en Visual Studio):
+**Preparar la base, una vez:** `scripts\crear-base.ps1` corre `sql\01_base.sql` en `RagBasico_F2`.
 
-1. `dotnet` lee `global.json` y elige el SDK 10.0.403, o el parche más nuevo instalado de 10.0.4xx.
-2. Compila el proyecto que describe `RagBasico.Api.csproj`.
-3. Lee `Properties\launchSettings.json`: perfil `http`, dirección `http://127.0.0.1:5081`, entorno `Development`.
-4. `Program.cs` arma la aplicación, que lee `appsettings.json` y las variables de entorno, y registra el cliente de Ollama.
-5. `app.Run()` deja la API escuchando hasta que se la frena con Ctrl+C.
+**Arrancar la API** (`dotnet run` en `RagBasico.Api`, o F5): igual que en la fase 1, más dos cosas. Registra el `Indexador`, el `Buscador` y el `Redactor`, y muestra en el log la carpeta de PDF o avisa que no existe.
 
-**Pedir `GET /`:** la función de `app.MapGet("/", ...)` lee `Rag:Proyecto` y `Rag:Fase` y la versión de .NET, y devuelve un JSON.
+**Cargar los PDF (`POST /indexar`):**
+
+1. El `Indexador` comprueba que exista la carpeta `Rag:CarpetaDocumentos`.
+2. Borra todos los documentos de `rag.Documento`; sus fragmentos se borran en cascada.
+3. Por cada PDF, en orden alfabético: PdfPig saca el texto página por página. Si tiene menos de 20 palabras, es un escaneo y se saltea.
+4. `Chunker.Partir` corta el texto en ventanas de 300 palabras con 50 repetidas.
+5. En una transacción: una fila en `rag.Documento` y una por fragmento en `rag.Fragmento`, cada uno empezando con `Documento: <nombre>`.
+6. El Full-Text indexa los fragmentos nuevos solo, en segundo plano, a los pocos segundos.
+
+**Buscar (`GET /buscar?q=...`):** `FREETEXTTABLE` corta la pregunta en palabras, busca sus plurales y conjugaciones en el índice, puntúa cada fragmento y devuelve los 5 mejores.
 
 **Preguntar (`POST /preguntar`):**
 
-1. Llega `{ "pregunta": "..." }` y ASP.NET Core lo convierte en un `PedidoPregunta`.
-2. ASP.NET Core le pasa a la función un `Ollama` nuevo, con su `HttpClient` apuntando a `Ollama:Url`.
-3. `Ollama.ChatAsync` manda a `POST /api/chat` el modelo, `stream: false`, `think: false`, las opciones de generación y dos mensajes: las reglas (sistema) y la pregunta (usuario).
-4. Ollama carga el modelo si no estaba cargado, lee la pregunta y escribe la respuesta. Devuelve el texto y los tiempos de cada parte, en nanosegundos.
-5. La función arma la respuesta con el texto, los tiempos en milisegundos y los tokens por segundo.
+1. El `Redactor` busca los 5 mejores fragmentos por palabras.
+2. Si no encontró ninguno, responde "No encontré esa información en los documentos." sin llamar al modelo.
+3. Si encontró, arma el mensaje: los fragmentos numerados `[1]` a `[5]` entre `<fragmentos>` y `</fragmentos>`, con los `<` y `>` del texto cambiados, y la pregunta al final.
+4. Se lo manda a Qwen con las cinco reglas como mensaje de sistema.
+5. Si Qwen respondió la frase de "no encontré", la devuelve sin fuentes. Si no, devuelve el texto con citas y las fuentes en el mismo orden.
 
 ## 3. Tablas
 
-Todavía no hay. La base de datos llega en la fase 2.
+Base `RagBasico_F2`, esquema `rag`:
+
+| Tabla | Columna | Tipo | Para qué |
+|---|---|---|---|
+| `rag.Documento` | `DocumentoId` | `INT IDENTITY` | Número del documento, clave primaria |
+| `rag.Documento` | `Archivo` | `NVARCHAR(260)` | Nombre del PDF. Único |
+| `rag.Documento` | `Titulo` | `NVARCHAR(400)` | Nombre sin `.pdf`; va al principio de cada fragmento |
+| `rag.Documento` | `FechaCarga` | `DATETIME2` | Cuándo se cargó. Por defecto, la fecha del servidor |
+| `rag.Fragmento` | `FragmentoId` | `INT IDENTITY` | Número del fragmento, clave primaria y clave del índice Full-Text |
+| `rag.Fragmento` | `DocumentoId` | `INT` | A qué documento pertenece. Si se borra el documento, se borra el fragmento (cascada) |
+| `rag.Fragmento` | `Orden` | `INT` | Posición del fragmento dentro del documento, desde 1 |
+| `rag.Fragmento` | `Texto` | `NVARCHAR(MAX)` | El texto, que empieza con `Documento: <nombre>` |
+
+Índice Full-Text: catálogo `ftRag`, sin distinguir acentos, sobre `rag.Fragmento.Texto`, en español (3082), con la lista de palabras vacías del sistema y actualización automática.
 
 ## 4. Configuración
 
@@ -46,29 +67,31 @@ En `RagBasico.Api\appsettings.json`:
 | `Logging:LogLevel:Default` | `Information` | Cuánto detalle escribe el log en la consola |
 | `Logging:LogLevel:Microsoft.AspNetCore` | `Warning` | Menos detalle para los mensajes internos de ASP.NET Core |
 | `AllowedHosts` | `*` | Qué nombres de servidor acepta la API: `*` es cualquiera |
+| `ConnectionStrings:Rag` | `Server=localhost\SQLEXPRESS;Database=RagBasico_F2;...` | La conexión con SQL Server: autenticación de Windows y confiar en el certificado de SQL Express |
 | `Rag:Proyecto` | `RAG básico` | El nombre del proyecto que devuelve `GET /` |
-| `Rag:Fase` | `fase-1-ollama` | La fase de esta versión. La usan `GET /` y `scripts\controlar-docs.ps1` |
-| `Ollama:Url` | `http://127.0.0.1:11434` | Dónde escucha Ollama. Con `127.0.0.1` y no `localhost`, para no esperar 2 segundos por IPv6 |
+| `Rag:Fase` | `fase-2-rag-minimo` | La fase de esta versión. La usan `GET /` y `scripts\controlar-docs.ps1` |
+| `Rag:CarpetaDocumentos` | vacío | La carpeta de los PDF. Se configura con la variable de entorno `Rag__CarpetaDocumentos` |
+| `Rag:PalabrasPorFragmento` | `300` | El tamaño de cada fragmento, en palabras |
+| `Rag:Solapamiento` | `50` | Cuántas palabras repite cada fragmento del anterior |
+| `Rag:TopK` | `5` | Cuántos fragmentos devuelve la búsqueda y se le pasan al modelo |
+| `Ollama:Url` | `http://127.0.0.1:11434` | Dónde escucha Ollama |
 | `Ollama:ModeloChat` | `qwen3.5:4b` | El modelo que redacta las respuestas |
-| `Ollama:SegundosDeEspera` | `300` | Cuánto espera la API una respuesta de Ollama antes de cortar. La primera carga del modelo puede tardar |
-| `Ollama:MantenerCargado` | `30m` | Cuánto tiempo deja Ollama el modelo en memoria después del último pedido (`keep_alive`) |
-
-Opciones de generación, fijas en `Ollama.ChatAsync`: `temperature` 0,3 (respuestas poco creativas), `top_p` 0,8 y `top_k` 20 (cuántas palabras candidatas considera), `num_ctx` 8192 (cuánto texto puede leer de una vez) y `num_predict` 700 (largo máximo de la respuesta, en tokens).
+| `Ollama:SegundosDeEspera` | `300` | Cuánto espera la API una respuesta de Ollama antes de cortar |
+| `Ollama:MantenerCargado` | `30m` | Cuánto tiempo deja Ollama el modelo en memoria después del último pedido |
 
 Fuera de `appsettings.json`:
 
 | Dónde | Qué | Para qué |
 |---|---|---|
-| `Properties\launchSettings.json` | `applicationUrl`: `http://127.0.0.1:5081` | Dirección y puerto de la API. Cada fase usa el puerto `508N` |
-| `Properties\launchSettings.json` | `ASPNETCORE_ENVIRONMENT`: `Development` | El entorno: en Development, los errores muestran el detalle |
+| Variable de entorno de usuario | `Rag__CarpetaDocumentos` | Pisa `Rag:CarpetaDocumentos` en todas las fases y carpetas. Se crea una vez y después hay que reabrir Visual Studio y las terminales |
+| `Properties\launchSettings.json` | `applicationUrl`: `http://127.0.0.1:5082` | Dirección y puerto. Cada fase usa el puerto `508N` |
 | `global.json` | `version`: `10.0.403`, `rollForward`: `latestPatch` | El SDK de .NET con el que se compila |
-
-Cualquier clave de `appsettings.json` se puede pisar con una variable de entorno, cambiando `:` por `__`. Por ejemplo, `Ollama__ModeloChat` pisa `Ollama:ModeloChat`.
 
 ## 5. Fuera del repo
 
 | Qué | Dónde | Desde |
 |---|---|---|
-| Una carpeta por fase, creada por `scripts\crear-worktrees.ps1` | Al lado del repo, con el mismo nombre y `-fases` al final: `..\RAG-BASICO-fases\` | fase-0-base |
+| Una carpeta por fase, creada por `scripts\crear-worktrees.ps1` | Al lado del repo: `..\RAG-BASICO-fases\` | fase-0-base |
 | Ollama y el modelo `qwen3.5:4b` | Instalados en la PC; Ollama escucha en `127.0.0.1:11434` | fase-1-ollama |
-| Los PDF, configurados con la variable de entorno `Rag__CarpetaDocumentos` | Al lado del repo, con `-datos` al final: `..\RAG-BASICO-datos\documentos\` | se usa desde la fase 2 |
+| SQL Server 2025 Express, con Full-Text | Instancia `localhost\SQLEXPRESS`, base `RagBasico_F2` | fase-2-rag-minimo |
+| Los PDF | La carpeta de la variable `Rag__CarpetaDocumentos`, por ejemplo `..\RAG-BASICO-datos\documentos\` | fase-2-rag-minimo |

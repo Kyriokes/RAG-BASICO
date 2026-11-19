@@ -1,6 +1,6 @@
 # Responsabilidades
 
-Qué hace cada archivo, clase, función y endpoint de esta versión, y quién lo usa. Esta es la versión de `fase-1-ollama`.
+Qué hace cada archivo, clase, función y endpoint de esta versión, y quién lo usa. Esta es la versión de `fase-2-rag-minimo`.
 
 Cómo leerlo:
 
@@ -18,13 +18,17 @@ RAG-BASICO\
 ├─ .gitignore                      qué no se sube a git
 ├─ README.md                       portada: qué es y cómo correr esta fase
 ├─ RagBasico.Api\                  la API web
+│  ├─ Buscador.cs                  búsqueda por palabras
+│  ├─ Chunker.cs                   corta el texto en fragmentos
+│  ├─ Indexador.cs                 carga los PDF en la base
 │  ├─ Modelos.cs                   records de pedidos y respuestas
 │  ├─ Ollama.cs                    cliente HTTP de Ollama
 │  ├─ Program.cs                   arranque, servicios y endpoints
 │  ├─ Properties\
 │  │  └─ launchSettings.json       dirección, puerto y forma de arrancar
-│  ├─ RagBasico.Api.csproj         el proyecto
+│  ├─ RagBasico.Api.csproj         el proyecto y sus paquetes
 │  ├─ RagBasico.Api.http           pedidos de prueba
+│  ├─ Redactor.cs                  arma la respuesta con Qwen
 │  └─ appsettings.json             configuración
 ├─ RagBasico.slnx                  la solución que abre Visual Studio
 ├─ docs\                           documentación
@@ -32,13 +36,18 @@ RAG-BASICO\
 │  ├─ erratas.md                   bugs encontrados después de cerrar una fase
 │  ├─ fases\
 │  │  ├─ fase-0-base.md            el esqueleto
-│  │  └─ fase-1-ollama.md          C# y HTTP contra Qwen
+│  │  ├─ fase-1-ollama.md          C# y HTTP contra Qwen
+│  │  └─ fase-2-rag-minimo.md      el primer RAG
 │  ├─ responsabilidades.md         este documento
 │  └─ worktrees.md                 una carpeta por fase
 ├─ global.json                     versión del SDK de .NET
-└─ scripts\                        herramientas del repo
-   ├─ controlar-docs.ps1           controla la documentación
-   └─ crear-worktrees.ps1          crea una carpeta por fase
+├─ scripts\                        herramientas del repo
+│  ├─ controlar-docs.ps1           controla la documentación
+│  ├─ crear-base.ps1               crea la base de la fase
+│  └─ crear-worktrees.ps1          crea una carpeta por fase
+└─ sql\                            scripts de la base
+   ├─ 01_base.sql                  tablas y Full-Text
+   └─ consultas-utiles.sql         consultas para mirar la base
 ```
 
 ## .editorconfig
@@ -70,13 +79,125 @@ RAG-BASICO\
 
 - **Responsabilidad:** la portada del repo: qué es, qué hace falta para correr esta fase, cómo correrla, cómo recorrer las fases y la tabla de fases.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo.
+
+## RagBasico.Api\Buscador.cs
+
+- **Responsabilidad:** encontrar los fragmentos que mejor responden una pregunta.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+### Clase Buscador
+
+- **Responsabilidad:** juntar en un solo lugar las formas de buscar. En esta fase hay una: por palabras.
+- **Recibe en el constructor:** la configuración, de donde lee `ConnectionStrings:Rag`.
+- **La registra:** Program.cs, con `AddScoped`: un objeto nuevo por pedido HTTP.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+### Buscador.PorPalabrasAsync(pregunta, topK, ct)
+
+- **Qué hace:** busca en el Full-Text de SQL Server los fragmentos que mejor coinciden con las palabras de la pregunta. `FREETEXTTABLE` corta la pregunta en palabras, busca también sus plurales y conjugaciones, y le pone un puntaje (`RANK`) a cada fragmento. Se piden los 50 mejores y se devuelven los `topK` primeros.
+- **Recibe:** la pregunta, cuántos fragmentos devolver y el token de cancelación.
+- **Devuelve:** una lista de `Fragmento` (número, archivo y texto), del más relevante al menos relevante. Vacía si la pregunta está vacía o si ninguna palabra coincide.
+- **Efectos:** lee `rag.Fragmento` y `rag.Documento`. No escribe nada.
+- **La llaman:** el endpoint `GET /buscar` y Redactor.ResponderAsync.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+## RagBasico.Api\Chunker.cs
+
+- **Responsabilidad:** cortar el texto de un documento en fragmentos del tamaño justo para buscar y para pasarle al modelo.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+### Clase Chunker
+
+- **Responsabilidad:** las funciones que cortan y cuentan palabras. Es estática: no guarda nada, solo transforma texto.
+- **Recibe en el constructor:** nada; una clase estática no tiene constructor.
+- **La registra:** nadie. Se usa directo: `Chunker.Partir(...)`.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+### Chunker.Partir(texto, palabras, solapamiento)
+
+- **Qué hace:** corta el texto en ventanas de `palabras` palabras. Cada ventana repite las últimas `solapamiento` palabras de la anterior, para no cortar una idea al medio. Si el solapamiento no es menor que el tamaño, lo ignora.
+- **Recibe:** el texto, el tamaño de cada fragmento en palabras y cuántas palabras repetir.
+- **Devuelve:** la lista de fragmentos, en orden. Vacía si el texto no tiene palabras.
+- **Efectos:** ninguno.
+- **La llaman:** Indexador.IndexarArchivoAsync.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+### Chunker.ContarPalabras(texto)
+
+- **Qué hace:** cuenta las palabras de un texto, separando por espacios, saltos de línea y tabulaciones.
+- **Recibe:** el texto.
+- **Devuelve:** la cantidad de palabras.
+- **Efectos:** ninguno.
+- **La llaman:** Indexador.IndexarArchivoAsync, para descartar los PDF sin texto.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+## RagBasico.Api\Indexador.cs
+
+- **Responsabilidad:** cargar los PDF de la carpeta en la base: leerlos, cortarlos en fragmentos y guardarlos.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+### Clase Indexador
+
+- **Responsabilidad:** el camino de un PDF hasta la base.
+- **Recibe en el constructor:** la configuración, de donde lee `ConnectionStrings:Rag`, `Rag:CarpetaDocumentos`, `Rag:PalabrasPorFragmento` y `Rag:Solapamiento`.
+- **La registra:** Program.cs, con `AddScoped`.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+### Indexador.IndexarCarpetaAsync(ct)
+
+- **Qué hace:** borra todo lo cargado y vuelve a cargar cada PDF de la carpeta, en orden alfabético. Si un PDF falla, lo anota y sigue con el siguiente. Si la carpeta no existe, no toca la base y lo informa.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** un `InformeIndexado`: cuántos documentos y fragmentos se cargaron, el tiempo como horas:minutos:segundos y una línea por archivo ("OK", "SIN TEXTO" o "ERROR").
+- **Efectos:** borra todas las filas de `rag.Documento` y, en cascada, de `rag.Fragmento`, y después inserta las nuevas. Lee los PDF de la carpeta.
+- **La llaman:** el endpoint `POST /indexar`.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+### Indexador.IndexarArchivoAsync(conexion, ruta, ct)
+
+- **Qué hace:** carga un PDF: lo lee, lo corta y guarda el documento y sus fragmentos en una sola transacción, así nunca queda un documento a medias. Cada fragmento empieza con `Documento: <nombre>`, para que la búsqueda también lo encuentre por el nombre del archivo. Un PDF con menos de 20 palabras se toma como escaneado y no se carga.
+- **Recibe:** la conexión abierta, la ruta del PDF y el token de cancelación.
+- **Devuelve:** la cantidad de fragmentos guardados, o -1 si el PDF no tiene texto.
+- **Efectos:** inserta una fila en `rag.Documento` y una por fragmento en `rag.Fragmento`.
+- **La llaman:** Indexador.IndexarCarpetaAsync.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+### Indexador.LeerPdf(ruta)
+
+- **Qué hace:** saca el texto de un PDF con PdfPig, página por página, en el orden en que se lee. Separa las páginas con una línea en blanco.
+- **Recibe:** la ruta del PDF.
+- **Devuelve:** todo el texto del PDF. Vacío si es una imagen escaneada.
+- **Efectos:** lee el archivo.
+- **La llaman:** Indexador.IndexarArchivoAsync.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+### Indexador.FormatearTiempo(tiempo)
+
+- **Qué hace:** muestra un tiempo como horas:minutos:segundos, también cuando pasa de 24 horas.
+- **Recibe:** el tiempo.
+- **Devuelve:** el texto, por ejemplo `00:03:27`.
+- **Efectos:** ninguno.
+- **La llaman:** Indexador.IndexarCarpetaAsync.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
 
 ## RagBasico.Api\Modelos.cs
 
 - **Responsabilidad:** los records que viajan entre las piezas: lo que llega en un pedido y lo que devuelve cada servicio. Un record es una clase chica de solo datos, que se compara por su contenido.
 - **Desde:** fase-1-ollama.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-2-rag-minimo.
 
 | Record | Campo | Tipo | Para qué |
 |---|---|---|---|
@@ -87,6 +208,21 @@ RAG-BASICO\
 | `RespuestaModelo` | `MsEscritura` | `int` | Lo que tardó en escribir la respuesta |
 | `RespuestaModelo` | `TokensPregunta` | `int` | Cuántos tokens leyó |
 | `RespuestaModelo` | `TokensRespuesta` | `int` | Cuántos tokens escribió |
+| `Fragmento` | `FragmentoId` | `int` | El número del fragmento en `rag.Fragmento` |
+| `Fragmento` | `Archivo` | `string` | El PDF de donde salió |
+| `Fragmento` | `Texto` | `string` | El texto, que empieza con `Documento: <nombre>` |
+| `InformeIndexado` | `Documentos` | `int` | Cuántos PDF se cargaron |
+| `InformeIndexado` | `Fragmentos` | `int` | Cuántos fragmentos se guardaron |
+| `InformeIndexado` | `Tiempo` | `string` | Lo que tardó, como horas:minutos:segundos |
+| `InformeIndexado` | `Detalle` | `List<string>` | Una línea por archivo: "OK", "SIN TEXTO" o "ERROR" |
+| `Fuente` | `Numero` | `int` | El número con que la cita el modelo: `[1]`, `[2]`... |
+| `Fuente` | `Archivo` | `string` | El PDF de esa fuente |
+| `Fuente` | `FragmentoId` | `int` | El fragmento exacto |
+| `RespuestaRag` | `Texto` | `string` | La respuesta, o la frase de "no encontré" |
+| `RespuestaRag` | `Fuentes` | `List<Fuente>` | Las fuentes, en el orden en que se le pasaron al modelo. Vacía si no encontró |
+| `RespuestaRag` | `MsBusqueda` | `int` | Lo que tardó la búsqueda |
+| `RespuestaRag` | `MsModelo` | `int` | Lo que tardó el modelo, medido desde la API |
+| `RespuestaRag` | `MsCarga`, `MsLectura`, `MsEscritura` | `int` | Los tiempos de Ollama, como en `RespuestaModelo` |
 
 ## RagBasico.Api\Ollama.cs
 
@@ -136,29 +272,46 @@ RAG-BASICO\
 ## RagBasico.Api\Program.cs
 
 - **Responsabilidad:** el punto de entrada de la API: arma la aplicación, registra los servicios, declara los endpoints y la deja escuchando.
-- **Contiene:** instrucciones de nivel superior, sin clase: el compilador arma solo el método `Main`. Se lee en cuatro bloques:
+- **Contiene:** instrucciones de nivel superior, sin clase: el compilador arma solo el método `Main`. Se lee en cinco bloques:
   - **Armado:** `WebApplication.CreateBuilder(args)` lee `appsettings.json`, las variables de entorno y los argumentos.
-  - **Servicios:** `AddHttpClient<Ollama>` registra el cliente de Ollama con la dirección `Ollama:Url` y el tiempo de espera `Ollama:SegundosDeEspera`. Cuando un endpoint pide un `Ollama`, ASP.NET Core se lo crea: eso es la inyección de dependencias.
+  - **Servicios:** `AddHttpClient<Ollama>` registra el cliente de Ollama con `Ollama:Url` y `Ollama:SegundosDeEspera`. `AddScoped` registra el `Indexador`, el `Buscador` y el `Redactor`: un objeto nuevo de cada uno por pedido. Cuando un endpoint o un constructor pide uno, ASP.NET Core se lo crea: eso es la inyección de dependencias.
+  - **Control al arrancar:** muestra en el log la carpeta de PDF que va a usar, o avisa que no existe y qué variable de entorno crear.
   - **Endpoints:** cada `app.MapGet(...)` o `app.MapPost(...)` asocia una ruta con la función que la atiende.
   - **Arranque:** `app.Run()` deja la API escuchando en la dirección de `launchSettings.json` hasta que se la frena con Ctrl+C.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo.
 
 ### GET /
 
 - **Recibe:** nada.
-- **Devuelve:** un JSON con el nombre del proyecto, la fase y la versión de .NET, por ejemplo `{ "proyecto": "RAG básico", "fase": "fase-1-ollama", "dotnet": ".NET 10.0.15" }`. El proyecto y la fase salen de la configuración (`Rag:Proyecto` y `Rag:Fase`).
+- **Devuelve:** un JSON con el nombre del proyecto, la fase y la versión de .NET. El proyecto y la fase salen de la configuración (`Rag:Proyecto` y `Rag:Fase`).
 - **La atiende:** una función sin nombre (lambda) declarada en `Program.cs` con `app.MapGet("/", ...)`.
 - **Desde:** fase-0-base.
+- **Cambió en:** nada todavía.
+
+### POST /indexar
+
+- **Recibe:** nada. Los PDF salen de la carpeta `Rag:CarpetaDocumentos`.
+- **Devuelve:** el `InformeIndexado` de la carga: documentos, fragmentos, tiempo y una línea por archivo.
+- **La atiende:** una función de `Program.cs` que llama a Indexador.IndexarCarpetaAsync.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+### GET /buscar
+
+- **Recibe:** la pregunta en el parámetro `q` de la dirección, por ejemplo `/buscar?q=requisitos reintegro`.
+- **Devuelve:** la lista de fragmentos encontrados por palabras, hasta `Rag:TopK`. Si falta `q`, un error 400.
+- **La atiende:** una función de `Program.cs` que llama a Buscador.PorPalabrasAsync.
+- **Desde:** fase-2-rag-minimo.
 - **Cambió en:** nada todavía.
 
 ### POST /preguntar
 
 - **Recibe:** un JSON con la pregunta, `{ "pregunta": "..." }`, que ASP.NET Core convierte en un `PedidoPregunta`.
-- **Devuelve:** `{ "texto", "msTotal", "msCarga", "msLectura", "msEscritura", "tokensPorSegundo" }`: la respuesta de Qwen y cuánto tardó cada parte. En esta fase Qwen responde con lo que sabe, sin documentos.
-- **La atiende:** una función sin nombre declarada en `Program.cs` con `app.MapPost("/preguntar", ...)`, que llama a Ollama.ChatAsync con una regla corta: responder en castellano y en pocas oraciones.
+- **Devuelve:** el `RespuestaRag`: la respuesta de Qwen con citas `[n]`, las fuentes y los tiempos. Si los documentos no alcanzan, la frase "No encontré esa información en los documentos." sin fuentes.
+- **La atiende:** una función de `Program.cs` que llama a Redactor.ResponderAsync.
 - **Desde:** fase-1-ollama.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-2-rag-minimo (responde con los documentos, no con lo que sabe Qwen).
 
 ## RagBasico.Api\Properties\launchSettings.json
 
@@ -166,27 +319,85 @@ RAG-BASICO\
 - **Contiene:** un solo perfil, `http`: escucha en `http://127.0.0.1:508N`, donde N es el número de la fase, con el entorno `Development`, y abre el navegador. Así dos fases pueden correr a la vez. El template traía también un perfil `https` con puertos al azar, que se sacó porque chocaría entre fases.
 - **Por qué 127.0.0.1:** es la misma dirección que usan Ollama y Qdrant, que escuchan solo en IPv4, así todo el proyecto usa una sola. La consecuencia es que la API también escucha solo en IPv4: se la llama con `http://127.0.0.1:508N`, como hacen el archivo `.http` y el navegador que abre el perfil. Con `localhost`, los clientes de .NET (PowerShell, `WebClient`, `HttpClient`) prueban primero IPv6 y tardan unos 2 segundos más en conectarse.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo.
 
 ## RagBasico.Api\RagBasico.Api.csproj
 
-- **Responsabilidad:** describe el proyecto para el compilador: una API web (`Microsoft.NET.Sdk.Web`) para .NET 10.
-- **Contiene:** `TargetFramework` `net10.0`; `Nullable` activado, para que el compilador avise cuando algo puede ser `null`; `ImplicitUsings`, que agrega a todos los archivos los `using` más comunes; y `GenerateDocumentationFile`, para que el compilador avise si una clase o función pública no tiene su `/// <summary>`. Todavía no usa paquetes NuGet.
+- **Responsabilidad:** describe el proyecto para el compilador: una API web (`Microsoft.NET.Sdk.Web`) para .NET 10, y los paquetes NuGet que usa.
+- **Contiene:** `TargetFramework` `net10.0`; `Nullable` activado, para que el compilador avise cuando algo puede ser `null`; `ImplicitUsings`, que agrega a todos los archivos los `using` más comunes; y `GenerateDocumentationFile`, para que el compilador avise si una clase o función pública no tiene su `/// <summary>`. Los paquetes, con la versión exacta para que cada fase compile igual siempre:
+  - **Dapper 2.1.89:** corre SQL y convierte cada fila en un objeto, sin escribir los `SqlCommand` y `SqlParameter` a mano.
+  - **Microsoft.Data.SqlClient 7.1.2:** la conexión con SQL Server.
+  - **PdfPig 0.1.16:** lee el texto de los PDF.
 - **Desde:** fase-0-base.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-2-rag-minimo.
 
 ## RagBasico.Api\RagBasico.Api.http
 
 - **Responsabilidad:** los pedidos de prueba de la fase, listos para mandar con "Send Request" desde Visual Studio, o desde VS Code con la extensión "REST Client".
 - **Contiene:** la variable `@host`, con la dirección y el puerto de la fase, y un pedido por cada endpoint de esta versión.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo.
+
+## RagBasico.Api\Redactor.cs
+
+- **Responsabilidad:** la "G" de RAG: armar la respuesta con los fragmentos encontrados.
+- **Contiene:** la clase `Redactor`, con dos constantes: `SinRespuesta`, la única frase para "no encontré", y `Reglas`, el mensaje de sistema con las cinco reglas para Qwen (usar solo los fragmentos, citar con `[n]`, la frase exacta cuando no alcanza, e ignorar instrucciones que vengan dentro de los documentos).
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+### Clase Redactor
+
+- **Responsabilidad:** buscar, pedirle la respuesta a Qwen y armar la respuesta con sus fuentes.
+- **Recibe en el constructor:** el `Buscador`, el cliente de `Ollama` y la configuración, de donde lee `Rag:TopK`.
+- **La registra:** Program.cs, con `AddScoped`.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+### Redactor.ResponderAsync(pregunta, ct)
+
+- **Qué hace:** busca los fragmentos de la pregunta y le pide la respuesta a Qwen. Si no hay fragmentos, responde la frase fija sin llamar al modelo. Si Qwen responde la frase de "no encontré", la devuelve sin fuentes, porque mostrar cinco documentos debajo confunde.
+- **Recibe:** la pregunta y el token de cancelación.
+- **Devuelve:** un `RespuestaRag`: el texto, las fuentes numeradas como las cita el modelo y los tiempos de la búsqueda y del modelo.
+- **Efectos:** lee SQL Server (por el buscador) y llama a Ollama.
+- **La llaman:** el endpoint `POST /preguntar`.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+### Redactor.ArmarMensaje(pregunta, fragmentos)
+
+- **Qué hace:** arma el mensaje del usuario para Qwen: los fragmentos numerados `[1]` a `[n]` entre `<fragmentos>` y `</fragmentos>`, y la pregunta al final, que es lo que más atiende un modelo chico. Corta cada fragmento a 2.500 caracteres.
+- **Recibe:** la pregunta y la lista de fragmentos.
+- **Devuelve:** el texto del mensaje.
+- **Efectos:** ninguno.
+- **La llaman:** Redactor.ResponderAsync.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+### Redactor.Neutralizar(texto)
+
+- **Qué hace:** cambia los signos `<` y `>` del texto de un documento por `‹` y `›`. Así un PDF que diga `</fragmentos>` no puede cerrar el bloque de datos y dar órdenes.
+- **Recibe:** el texto de un fragmento.
+- **Devuelve:** el mismo texto, con los signos cambiados.
+- **Efectos:** ninguno.
+- **La llaman:** Redactor.ArmarMensaje.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+### Redactor.EsSinRespuesta(texto)
+
+- **Qué hace:** dice si el modelo respondió la frase de "no encontré", aunque le agregue comillas o le saque el punto final. Un modelo chico no siempre copia la frase exacta.
+- **Recibe:** el texto que escribió el modelo.
+- **Devuelve:** `true` si es la frase de "no encontré".
+- **Efectos:** ninguno.
+- **La llaman:** Redactor.ResponderAsync.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
 
 ## RagBasico.Api\appsettings.json
 
 - **Responsabilidad:** la configuración de la API. Cada clave está explicada en `docs\arquitectura.md`.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo.
 
 ## RagBasico.slnx
 
@@ -199,7 +410,7 @@ RAG-BASICO\
 
 - **Responsabilidad:** cómo se arma esta versión: las piezas, los recorridos paso a paso, las tablas, la configuración y lo que está fuera del repo.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo.
 
 ## docs\erratas.md
 
@@ -219,11 +430,17 @@ RAG-BASICO\
 - **Desde:** fase-1-ollama.
 - **Cambió en:** nada todavía.
 
+## docs\fases\fase-2-rag-minimo.md
+
+- **Responsabilidad:** qué agregó la fase 2, en qué orden leerla, cómo probarla, qué se midió y qué se decidió.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
 ## docs\responsabilidades.md
 
 - **Responsabilidad:** este documento: qué hace cada archivo, clase, función y endpoint, y quién lo usa.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo.
 
 ## docs\worktrees.md
 
@@ -274,6 +491,16 @@ RAG-BASICO\
 | `Analizar-CSharp` | Lee un `.cs` y devuelve sus tipos y funciones, con su línea y si tienen `/// <summary>`. Reconoce métodos genéricos y los que devuelven tuplas |
 | `Buscar-Endpoints` | Devuelve los endpoints de un `.cs`, sin contar los que están en comentarios |
 
+## scripts\crear-base.ps1
+
+- **Responsabilidad:** crea la base de la fase y corre en orden los scripts numerados de `sql\`.
+- **Parámetros:** `-Base` y `-Servidor`, opcionales. Por defecto salen de `ConnectionStrings:Rag` en `RagBasico.Api\appsettings.json`.
+- **Ejemplo:** `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1`
+- **Requiere:** sqlcmd (`winget install Microsoft.Sqlcmd`), SQL Server con la instancia de la cadena de conexión y Windows PowerShell 5.1.
+- **Pasos:** lee la cadena de conexión; busca los `sql\NN_*.sql` y los ordena por nombre; corre cada uno con `sqlcmd -E -C -b -v Base=<base>`: autenticación de Windows, confiar en el certificado de SQL Express y cortar ante el primer error.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
 ## scripts\crear-worktrees.ps1
 
 - **Responsabilidad:** crea o actualiza una carpeta por cada fase, con git worktree, para leer y correr cada fase sin cambiar de branch.
@@ -287,3 +514,20 @@ RAG-BASICO\
   4. Avisa qué carpetas ya no tienen branch, y termina mostrando `git worktree list`.
 - **Desde:** fase-0-base.
 - **Cambió en:** nada todavía.
+
+## sql\01_base.sql
+
+- **Responsabilidad:** crea la base de la fase, el esquema `rag`, las tablas de documentos y fragmentos, y el índice Full-Text en español.
+- **Qué crea:** la base (si no existe), el esquema `rag`, las tablas `rag.Documento` y `rag.Fragmento`, el catálogo `ftRag` sin distinguir acentos y el índice Full-Text sobre `rag.Fragmento.Texto`, en español (3082) y con actualización automática. Cada paso controla si ya está hecho, así se puede correr de nuevo.
+- **Variables sqlcmd:** `Base`, el nombre de la base. Lo pasa `scripts\crear-base.ps1`; en SSMS se define con `:setvar Base RagBasico_F2` en modo SQLCMD.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+## sql\consultas-utiles.sql
+
+- **Responsabilidad:** consultas para mirar la base desde SSMS: cuántos documentos y fragmentos hay, fragmentos al azar, si el Full-Text terminó de indexar, una búsqueda a mano y qué palabras busca el Full-Text a partir de una.
+- **Qué crea:** nada. `scripts\crear-base.ps1` no la corre, porque su nombre no empieza con un número.
+- **Variables sqlcmd:** ninguna. Antes de usarla se elige la base de la fase en SSMS.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
