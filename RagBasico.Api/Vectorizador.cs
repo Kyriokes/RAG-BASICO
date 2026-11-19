@@ -23,7 +23,7 @@ public sealed class Vectorizador
         _lote = Math.Max(1, config.GetValue("Rag:LoteVectores", 16));
     }
 
-    /// <summary>Recorre de a lotes los fragmentos sin vector, en orden de número de fragmento: le pide los vectores a Ollama y los guarda. Si un fragmento falla, lo anota y sigue con los demás.</summary>
+    /// <summary>Recorre de a lotes los fragmentos sin vector, en orden de número de fragmento: le pide los vectores a Ollama y los guarda. Si un fragmento falla, lo anota y sigue con los demás; si Ollama no responde, o fallan cinco lotes seguidos, corta.</summary>
     public async Task<InformeVectores> CalcularPendientesAsync(CancellationToken ct)
     {
         Stopwatch reloj = Stopwatch.StartNew();
@@ -37,6 +37,7 @@ public sealed class Vectorizador
             // Cada lote empieza después del último fragmento visto: así no se relee lo ya hecho, y un fragmento
             // que falla no traba la corrida. Queda en NULL y se vuelve a intentar en el próximo /vectores.
             int ultimo = 0;
+            int lotesFallidosSeguidos = 0;
             while (true)
             {
                 List<Fragmento> lote = (await conexion.QueryAsync<Fragmento>(new CommandDefinition(
@@ -50,13 +51,30 @@ public sealed class Vectorizador
                 }
                 ultimo = lote[lote.Count - 1].FragmentoId;
 
-                int guardados = await GuardarLoteAsync(conexion, lote, detalle, ct);
+                int guardados;
+                try
+                {
+                    guardados = await GuardarLoteAsync(conexion, lote, detalle, ct);
+                }
+                catch (Exception ex)
+                {
+                    if (ct.IsCancellationRequested || !EsCaida(ex))
+                    {
+                        throw;
+                    }
+                    // Si Ollama no responde, seguir sería fallar en cada lote. Lo que falta queda en NULL para el próximo /vectores.
+                    detalle.Add("ERROR: Ollama no responde o tardó más de Ollama:SegundosDeEspera (" + ex.Message + "). Se cortó la corrida; los fragmentos que faltan quedan para el próximo POST /vectores.");
+                    break;
+                }
                 calculados += guardados;
                 fallados += lote.Count - guardados;
-                if (guardados == 0)
+
+                // Un lote entero que falla puede ser de textos que Ollama no acepta, y se sigue. Cinco seguidos ya no:
+                // es algo general, como la base, y seguir solo llenaría el detalle de errores iguales.
+                lotesFallidosSeguidos = guardados == 0 ? lotesFallidosSeguidos + 1 : 0;
+                if (lotesFallidosSeguidos == 5)
                 {
-                    // Si fallaron todos, de a uno, el problema no es de un fragmento: Ollama no anda o no tiene el modelo.
-                    detalle.Add("ERROR: fallaron todos los fragmentos del lote, uno por uno. Se cortó la corrida: revisá que Ollama esté andando y tenga el modelo de embeddings.");
+                    detalle.Add("ERROR: fallaron todos los fragmentos de 5 lotes seguidos. Se cortó la corrida: el problema no parece de un fragmento; revisá los errores de arriba.");
                     break;
                 }
             }
@@ -92,7 +110,13 @@ public sealed class Vectorizador
         return texto.ToString();
     }
 
-    /// <summary>Calcula y guarda los vectores de un lote en un solo pedido a Ollama. Si falla, prueba los fragmentos de a uno, así un fragmento con problemas no deja sin vector a los demás. Devuelve cuántos guardó.</summary>
+    /// <summary>Dice si un error muestra que Ollama no responde: no se pudo conectar, o no contestó a tiempo. El error de un fragmento en particular, como un texto que Ollama no acepta, no lo es.</summary>
+    public static bool EsCaida(Exception error)
+    {
+        return error is HttpRequestException || (error is TaskCanceledException && error.InnerException is TimeoutException);
+    }
+
+    /// <summary>Calcula y guarda los vectores de un lote en un solo pedido a Ollama. Si falla, prueba los fragmentos de a uno, así un fragmento con problemas no deja sin vector a los demás. Si Ollama no responde, no prueba más: lanza el error. Devuelve cuántos guardó.</summary>
     private async Task<int> GuardarLoteAsync(SqlConnection conexion, List<Fragmento> lote, List<string> detalle, CancellationToken ct)
     {
         try
@@ -100,11 +124,11 @@ public sealed class Vectorizador
             await CalcularYGuardarAsync(conexion, lote, ct);
             return lote.Count;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Si se canceló el pedido, por ejemplo porque se cerró la API, se corta todo.
-            // Cualquier otro error, incluido un tiempo de espera de Ollama, es de este lote: se prueba de a uno.
-            if (ct.IsCancellationRequested)
+            // Si se canceló el pedido, por ejemplo porque se cerró la API, o si Ollama no responde, se corta todo.
+            // Cualquier otro error es de este lote: se prueba de a uno, para encontrar el fragmento que falla.
+            if (ct.IsCancellationRequested || EsCaida(ex))
             {
                 throw;
             }
@@ -120,7 +144,7 @@ public sealed class Vectorizador
             }
             catch (Exception ex)
             {
-                if (ct.IsCancellationRequested)
+                if (ct.IsCancellationRequested || EsCaida(ex))
                 {
                     throw;
                 }
