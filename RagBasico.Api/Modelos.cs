@@ -47,6 +47,33 @@ public sealed record RespuestaRag(
     int MsLectura,
     int MsEscritura);
 
+/// <summary>Un punto para subir a Qdrant: el número de fragmento como id, su vector y el número de documento.</summary>
+public sealed record PuntoQdrant(int Id, float[] Vector, int DocumentoId);
+
+/// <summary>El estado de la colección según Qdrant: el color, cuántos puntos tiene y cuántos vectores están en el índice HNSW.</summary>
+public sealed record InfoColeccion(string Estado, int Puntos, int VectoresIndexados);
+
+/// <summary>La comparación entre SQL y Qdrant: los números de fragmento que faltan en Qdrant y los que sobran.</summary>
+public sealed record ComparacionIds(List<int> Faltan, List<int> Sobran);
+
+/// <summary>Lo que devuelve GET /qdrant/estado.</summary>
+public sealed record EstadoQdrant(
+    bool Iguales,
+    string Coleccion,
+    int ConVectorEnSql,
+    int PuntosEnQdrant,
+    int VectoresIndexados,
+    string EstadoColeccion,
+    int CantidadFaltan,
+    int CantidadSobran,
+    List<int> Faltan,
+    List<int> Sobran,
+    bool? MuestraCoincide,
+    string Mensaje);
+
+/// <summary>Lo que devuelve POST /qdrant/reconstruir: cuántos puntos se subieron y cuántos se borraron, el tiempo y el detalle.</summary>
+public sealed record InformeQdrant(int Subidos, int Borrados, string Tiempo, List<string> Detalle);
+
 /// <summary>Una pregunta del examen y los documentos que la responden. Sin documentos, es una pregunta sin respuesta.</summary>
 public sealed record PreguntaExamen(string Pregunta, List<string> Documentos);
 

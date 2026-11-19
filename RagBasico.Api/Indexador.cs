@@ -15,14 +15,16 @@ public sealed class Indexador
     // Un PDF con menos palabras por página que esto, en promedio, se toma como escaneado y no se carga.
     private const int PalabrasPorPaginaMinimas = 40;
 
+    private readonly Sincronizador _sincronizador;
     private readonly string _conexion;
     private readonly string _carpeta;
     private readonly int _palabras;
     private readonly int _solapamiento;
 
-    /// <summary>Lee de la configuración la cadena de conexión, la carpeta de PDF y el tamaño de los fragmentos.</summary>
-    public Indexador(IConfiguration config)
+    /// <summary>Recibe el sincronizador, para poner Qdrant al día después de cargar, y lee de la configuración la cadena de conexión, la carpeta de PDF y el tamaño de los fragmentos.</summary>
+    public Indexador(Sincronizador sincronizador, IConfiguration config)
     {
+        _sincronizador = sincronizador;
         _conexion = config.GetConnectionString("Rag") ?? throw new InvalidOperationException("Falta ConnectionStrings:Rag en la configuración.");
         _carpeta = config["Rag:CarpetaDocumentos"] ?? "";
         _palabras = config.GetValue("Rag:PalabrasPorFragmento", 300);
@@ -88,6 +90,8 @@ public sealed class Indexador
         {
             detalle.Add("SIN CAMBIOS: los " + plan.SinCambios.Count + " PDF ya estaban cargados.");
         }
+        // Los fragmentos borrados en SQL también se borran de Qdrant. Los nuevos todavía no tienen vector: los sube /vectores.
+        await _sincronizador.PonerAlDiaAsync(detalle, ct);
         return new InformeIndexado(cargados, plan.SinCambios.Count, plan.Borrar.Count, fragmentos, FormatearTiempo(reloj.Elapsed), detalle);
     }
 

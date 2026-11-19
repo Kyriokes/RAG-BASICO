@@ -8,7 +8,14 @@ builder.Services.AddHttpClient<Ollama>(cliente =>
     cliente.BaseAddress = new Uri(builder.Configuration["Ollama:Url"] ?? "http://127.0.0.1:11434");
     cliente.Timeout = TimeSpan.FromSeconds(builder.Configuration.GetValue("Ollama:SegundosDeEspera", 300));
 });
+// Qdrant también como cliente HTTP. El tiempo de espera es corto: si Qdrant no responde, la híbrida sigue con SQL.
+builder.Services.AddHttpClient<Qdrant>(cliente =>
+{
+    cliente.BaseAddress = new Uri(builder.Configuration["Qdrant:Url"] ?? "http://127.0.0.1:6333");
+    cliente.Timeout = TimeSpan.FromSeconds(builder.Configuration.GetValue("Qdrant:SegundosDeEspera", 10));
+});
 // Un objeto nuevo de cada uno por pedido HTTP.
+builder.Services.AddScoped<Sincronizador>();
 builder.Services.AddScoped<Indexador>();
 builder.Services.AddScoped<Vectorizador>();
 builder.Services.AddScoped<Buscador>();
@@ -69,5 +76,11 @@ app.MapPost("/preguntar", async (PedidoPregunta pedido, Redactor redactor, Cance
 
 app.MapPost("/evaluar", async (Evaluador evaluador, CancellationToken ct) =>
     await evaluador.CorrerAsync(ct));
+
+app.MapGet("/qdrant/estado", async (Sincronizador sincronizador, CancellationToken ct) =>
+    await sincronizador.EstadoAsync(ct));
+
+app.MapPost("/qdrant/reconstruir", async (Sincronizador sincronizador, CancellationToken ct) =>
+    await sincronizador.ReconstruirAsync(ct));
 
 app.Run();

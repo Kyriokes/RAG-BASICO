@@ -10,13 +10,15 @@ namespace RagBasico.Api;
 public sealed class Vectorizador
 {
     private readonly Ollama _ollama;
+    private readonly Sincronizador _sincronizador;
     private readonly string _conexion;
     private readonly int _lote;
 
-    /// <summary>Recibe el cliente de Ollama y lee de la configuración la conexión y cuántos fragmentos mandar en cada pedido.</summary>
-    public Vectorizador(Ollama ollama, IConfiguration config)
+    /// <summary>Recibe el cliente de Ollama y el sincronizador, para subir los vectores nuevos a Qdrant, y lee de la configuración la conexión y cuántos fragmentos mandar en cada pedido.</summary>
+    public Vectorizador(Ollama ollama, Sincronizador sincronizador, IConfiguration config)
     {
         _ollama = ollama;
+        _sincronizador = sincronizador;
         _conexion = config.GetConnectionString("Rag") ?? throw new InvalidOperationException("Falta ConnectionStrings:Rag en la configuración.");
         _lote = Math.Max(1, config.GetValue("Rag:LoteVectores", 16));
     }
@@ -66,6 +68,8 @@ public sealed class Vectorizador
         {
             detalle.Add("SIN CAMBIOS: todos los fragmentos ya tenían vector.");
         }
+        // Los vectores nuevos se suben a Qdrant. Si Qdrant estuvo apagado, también sube los que le faltaban de antes.
+        await _sincronizador.PonerAlDiaAsync(detalle, ct);
         double segundos = reloj.Elapsed.TotalSeconds;
         double porSegundo = segundos > 0 ? Math.Round(calculados / segundos, 1) : 0;
         return new InformeVectores(calculados, fallados, pendientes, porSegundo, Indexador.FormatearTiempo(reloj.Elapsed), detalle);
