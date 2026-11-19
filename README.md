@@ -4,7 +4,7 @@ Un prototipo de RAG (búsqueda en documentos y respuesta redactada por un modelo
 
 Cada fase agrega una pieza y queda marcada con su branch, así el proyecto se puede recorrer de la versión más chica a la final.
 
-**Esta es la fase 5: buscar por significado.** Cada fragmento tiene un vector calculado con `qwen3-embedding:0.6b` y guardado en SQL Server, y la búsqueda puede ser por palabras o por vectores: encuentra el fragmento aunque la pregunta use otras palabras. El examen compara los dos modos.
+**Esta es la fase 6: lo mejor de las dos, y la página.** La búsqueda híbrida corre por palabras y por vectores al mismo tiempo y mezcla los resultados por puesto con RRF; pasa a ser el modo por defecto. La API sirve la página de la demo en la raíz: se elige el modo y se ve la respuesta con sus fuentes.
 
 ## Requisitos de esta fase
 
@@ -31,7 +31,7 @@ cd RagBasico.Api
 dotnet run
 ```
 
-Mandá los pedidos de `RagBasico.Api\RagBasico.Api.http` en orden: `POST /indexar` pone la base al día con la carpeta (la segunda vez seguida dice `SIN CAMBIOS`), `POST /vectores` calcula los vectores, `GET /buscar` muestra los fragmentos que encuentra en cada modo, `POST /preguntar` responde con citas y `POST /evaluar` corre el examen.
+El navegador abre la página de la demo, `http://127.0.0.1:5086/`. Antes de preguntar, mandá los pedidos de `RagBasico.Api\RagBasico.Api.http` en orden: `POST /indexar` pone la base al día con la carpeta (la segunda vez seguida dice `SIN CAMBIOS`), `POST /vectores` calcula los vectores, `GET /buscar` muestra los fragmentos que encuentra en cada modo, `POST /preguntar` responde con citas y `POST /evaluar` corre el examen.
 
 El examen va en `examen.csv`, con el formato de `examen.ejemplo.csv`. Para congelar los PDF del examen: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-manifiesto.ps1`.
 
@@ -51,8 +51,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\controlar-docs.ps1
 | 3 | `fase-3-medicion` | El examen, el evaluador, el manifiesto de los PDF y el registro de consultas | 5083 | `RagBasico_F3` | "entre los 5" por palabras: pendiente | [fase-3-medicion.md](docs/fases/fase-3-medicion.md) |
 | 4 | `fase-4-carga` | Carga incremental con huella, borrado de lo que ya no está, corte por párrafos y aviso de escaneados | 5084 | `RagBasico_F4` | segunda carga "sin cambios" y "entre los 5": pendiente | [fase-4-carga.md](docs/fases/fase-4-carga.md) |
 | 5 | `fase-5-vectores` | Vectores en SQL Server, búsqueda por significado con `VECTOR_DISTANCE` y el examen en los dos modos | 5085 | `RagBasico_F5` | "entre los 5" por vectores contra palabras: pendiente | [fase-5-vectores.md](docs/fases/fase-5-vectores.md) |
+| 6 | `fase-6-hibrida` | Búsqueda híbrida con RRF, las dos búsquedas en paralelo y la página de la demo | 5086 | `RagBasico_F6` | "entre los 5" de los tres modos: pendiente | [fase-6-hibrida.md](docs/fases/fase-6-hibrida.md) |
 
-Para ver qué agregó una fase: `git diff fase-4-carga fase-5-vectores`, o la página "compare" de GitHub entre las dos branches. En un clon nuevo, primero hay que traer las branches de fase: está en [docs/worktrees.md](docs/worktrees.md).
+Para ver qué agregó una fase: `git diff fase-5-vectores fase-6-hibrida`, o la página "compare" de GitHub entre las dos branches. En un clon nuevo, primero hay que traer las branches de fase: está en [docs/worktrees.md](docs/worktrees.md).
 
 ## Cómo recorrer las fases
 

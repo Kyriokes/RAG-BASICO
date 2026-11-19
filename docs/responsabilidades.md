@@ -1,6 +1,6 @@
 # Responsabilidades
 
-Qué hace cada archivo, clase, función y endpoint de esta versión, y quién lo usa. Esta es la versión de `fase-5-vectores`.
+Qué hace cada archivo, clase, función y endpoint de esta versión, y quién lo usa. Esta es la versión de `fase-6-hibrida`.
 
 Cómo leerlo:
 
@@ -18,7 +18,7 @@ RAG-BASICO\
 ├─ .gitignore                      qué no se sube a git
 ├─ README.md                       portada: qué es y cómo correr esta fase
 ├─ RagBasico.Api\                  la API web
-│  ├─ Buscador.cs                  búsqueda por palabras y por vectores
+│  ├─ Buscador.cs                  búsqueda por palabras, por vectores e híbrida
 │  ├─ Chunker.cs                   corta el texto en fragmentos por párrafos
 │  ├─ Evaluador.cs                 corre el examen
 │  ├─ Indexador.cs                 pone la base al día con la carpeta de PDF
@@ -31,8 +31,11 @@ RAG-BASICO\
 │  ├─ RagBasico.Api.csproj         el proyecto y sus paquetes
 │  ├─ RagBasico.Api.http           pedidos de prueba
 │  ├─ Redactor.cs                  arma la respuesta con Qwen y la registra
+│  ├─ Rrf.cs                       mezcla dos listas de resultados por puesto
 │  ├─ Vectorizador.cs              calcula el vector de cada fragmento
-│  └─ appsettings.json             configuración
+│  ├─ appsettings.json             configuración
+│  └─ wwwroot\
+│     └─ index.html                la página de la demo
 ├─ RagBasico.slnx                  la solución que abre Visual Studio
 ├─ docs\                           documentación
 │  ├─ arquitectura.md              piezas, recorridos, tablas y configuración
@@ -43,7 +46,8 @@ RAG-BASICO\
 │  │  ├─ fase-2-rag-minimo.md      el primer RAG
 │  │  ├─ fase-3-medicion.md        el examen y los tiempos
 │  │  ├─ fase-4-carga.md           la carga incremental y el corte por párrafos
-│  │  └─ fase-5-vectores.md        la búsqueda por significado
+│  │  ├─ fase-5-vectores.md        la búsqueda por significado
+│  │  └─ fase-6-hibrida.md         la híbrida y la página de la demo
 │  ├─ responsabilidades.md         este documento
 │  └─ worktrees.md                 una carpeta por fase
 ├─ documentos.csv                  manifiesto de los PDF del examen
@@ -92,26 +96,26 @@ RAG-BASICO\
 
 - **Responsabilidad:** la portada del repo: qué es, qué hace falta para correr esta fase, cómo correrla, cómo recorrer las fases y la tabla de fases.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida.
 
 ## RagBasico.Api\Buscador.cs
 
-- **Responsabilidad:** encontrar los fragmentos que mejor responden una pregunta, por palabras o por significado.
-- **Contiene:** la clase `Buscador`, con la lista pública `Modos` (`palabras` y `vectores`) y la constante `ModoPorDefecto` (`palabras`).
+- **Responsabilidad:** encontrar los fragmentos que mejor responden una pregunta: por palabras, por significado o con las dos mezcladas.
+- **Contiene:** la clase `Buscador`, con la lista pública `Modos` (`palabras`, `vectores` e `hibrida`) y la constante `ModoPorDefecto` (`hibrida`).
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-5-vectores.
+- **Cambió en:** fase-5-vectores, fase-6-hibrida.
 
 ### Clase Buscador
 
-- **Responsabilidad:** juntar en un solo lugar las formas de buscar: por palabras, con el Full-Text, y por vectores, con `VECTOR_DISTANCE`.
-- **Recibe en el constructor:** el cliente de `Ollama`, para calcular el vector de la pregunta, y la configuración, de donde lee `ConnectionStrings:Rag`.
+- **Responsabilidad:** juntar en un solo lugar las formas de buscar: por palabras, con el Full-Text; por vectores, con `VECTOR_DISTANCE`; y la híbrida, que hace las dos y las mezcla.
+- **Recibe en el constructor:** el cliente de `Ollama`, para calcular el vector de la pregunta, y la configuración, de donde lee `ConnectionStrings:Rag` y `Rag:CandidatosHibrida`.
 - **La registra:** Program.cs, con `AddScoped`: un objeto nuevo por pedido HTTP.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-5-vectores (recibe el cliente de Ollama y busca por vectores).
+- **Cambió en:** fase-5-vectores (recibe el cliente de Ollama y busca por vectores), fase-6-hibrida (la híbrida, que pasa a ser el modo por defecto).
 
 ### Buscador.ElegirModo(pedido)
 
-- **Qué hace:** controla el modo que llega en un pedido. Sin modo, devuelve el modo por defecto. Con un modo que existe, lo devuelve en minúsculas y sin espacios. Con un modo que no existe devuelve `null`, para que quien llama dé un error en lugar de buscar con otro modo sin avisar.
+- **Qué hace:** controla el modo que llega en un pedido. Sin modo, devuelve el modo por defecto, `hibrida`. Con un modo que existe, lo devuelve en minúsculas y sin espacios. Con un modo que no existe devuelve `null`, para que quien llama dé un error en lugar de buscar con otro modo sin avisar.
 - **Recibe:** el modo del pedido, que puede faltar.
 - **Devuelve:** el modo, o `null` si no existe.
 - **Efectos:** ninguno.
@@ -121,12 +125,22 @@ RAG-BASICO\
 
 ### Buscador.BuscarAsync(pregunta, modo, topK, ct)
 
-- **Qué hace:** busca con el modo pedido: llama a Buscador.PorPalabrasAsync o a Buscador.PorVectoresAsync. Con un modo que no existe lanza un `ArgumentException`, aunque los endpoints ya lo controlaron antes.
+- **Qué hace:** busca con el modo pedido: llama a Buscador.PorPalabrasAsync, a Buscador.PorVectoresAsync o a Buscador.HibridaAsync. Con un modo que no existe lanza un `ArgumentException`, aunque los endpoints ya lo controlaron antes.
 - **Recibe:** la pregunta, el modo, cuántos fragmentos devolver y el token de cancelación.
 - **Devuelve:** la lista de `Fragmento`, del más relevante al menos relevante.
 - **Efectos:** los de la búsqueda que usa.
 - **La llaman:** el endpoint `GET /buscar`, Redactor.ResponderAsync y Evaluador.CorrerAsync.
 - **Desde:** fase-5-vectores.
+- **Cambió en:** fase-6-hibrida (el modo `hibrida`).
+
+### Buscador.HibridaAsync(pregunta, topK, ct)
+
+- **Qué hace:** busca por palabras y por vectores al mismo tiempo, pide a cada una los mejores 20 candidatos (`Rag:CandidatosHibrida`) y los mezcla por puesto con Rrf.Mezclar. Las dos búsquedas arrancan juntas y recién después se espera a las dos con `Task.WhenAll`: se tarda lo que la más lenta, no la suma. Cada una abre su propia conexión, así no se pisan.
+- **Recibe:** la pregunta, cuántos fragmentos devolver y el token de cancelación.
+- **Devuelve:** la lista de `Fragmento` mezclada, de mayor a menor puntaje RRF.
+- **Efectos:** los de las dos búsquedas: un pedido a Ollama y dos lecturas de SQL Server.
+- **La llaman:** Buscador.BuscarAsync.
+- **Desde:** fase-6-hibrida.
 - **Cambió en:** nada todavía.
 
 ### Buscador.PorPalabrasAsync(pregunta, topK, ct)
@@ -135,7 +149,7 @@ RAG-BASICO\
 - **Recibe:** la pregunta, cuántos fragmentos devolver y el token de cancelación.
 - **Devuelve:** una lista de `Fragmento` (número, archivo y texto), del más relevante al menos relevante. Vacía si la pregunta está vacía o si ninguna palabra coincide.
 - **Efectos:** lee `rag.Fragmento` y `rag.Documento`. No escribe nada.
-- **La llaman:** Buscador.BuscarAsync.
+- **La llaman:** Buscador.BuscarAsync y Buscador.HibridaAsync.
 - **Desde:** fase-2-rag-minimo.
 - **Cambió en:** nada todavía.
 
@@ -145,7 +159,7 @@ RAG-BASICO\
 - **Recibe:** la pregunta, cuántos fragmentos devolver y el token de cancelación.
 - **Devuelve:** la lista de `Fragmento`, del más cercano al más lejano. Vacía si la pregunta está vacía o si ningún fragmento tiene vector.
 - **Efectos:** un pedido a Ollama; lee `rag.Fragmento` y `rag.Documento`. No escribe nada.
-- **La llaman:** Buscador.BuscarAsync.
+- **La llaman:** Buscador.BuscarAsync y Buscador.HibridaAsync.
 - **Desde:** fase-5-vectores.
 - **Cambió en:** nada todavía.
 
@@ -427,7 +441,7 @@ RAG-BASICO\
 | Record | Campo | Tipo | Para qué |
 |---|---|---|---|
 | `PedidoPregunta` | `Pregunta` | `string` | La pregunta que llega en el cuerpo de `POST /preguntar` |
-| `PedidoPregunta` | `Modo` | `string?` | El modo de búsqueda, `palabras` o `vectores`. Si falta, `palabras` |
+| `PedidoPregunta` | `Modo` | `string?` | El modo de búsqueda: `palabras`, `vectores` o `hibrida`. Si falta, `hibrida` |
 | `RespuestaModelo` | `Texto` | `string` | Lo que escribió el modelo |
 | `RespuestaModelo` | `MsCarga`, `MsLectura`, `MsEscritura` | `int` | Lo que tardó Ollama en cargar el modelo (0 si ya estaba), en leer el pedido y en escribir la respuesta |
 | `RespuestaModelo` | `TokensPregunta`, `TokensRespuesta` | `int` | Cuántos tokens leyó y cuántos escribió |
@@ -564,23 +578,24 @@ RAG-BASICO\
 
 ## RagBasico.Api\Program.cs
 
-- **Responsabilidad:** el punto de entrada de la API: arma la aplicación, registra los servicios, declara los endpoints y la deja escuchando.
-- **Contiene:** instrucciones de nivel superior, sin clase: el compilador arma solo el método `Main`. Se lee en cinco bloques:
+- **Responsabilidad:** el punto de entrada de la API: arma la aplicación, registra los servicios, sirve la página de la demo, declara los endpoints y la deja escuchando.
+- **Contiene:** instrucciones de nivel superior, sin clase: el compilador arma solo el método `Main`. Se lee en seis bloques:
   - **Armado:** `WebApplication.CreateBuilder(args)` lee `appsettings.json`, las variables de entorno y los argumentos.
   - **Servicios:** `AddHttpClient<Ollama>` registra el cliente de Ollama con `Ollama:Url` y `Ollama:SegundosDeEspera`. `AddScoped` registra el `Indexador`, el `Vectorizador`, el `Buscador`, el `Redactor` y el `Evaluador`: un objeto nuevo de cada uno por pedido. Cuando un endpoint o un constructor pide uno, ASP.NET Core se lo crea: eso es la inyección de dependencias.
   - **Control al arrancar:** muestra en el log la carpeta de PDF que va a usar, o avisa que no existe y qué variable de entorno crear.
+  - **Página:** `UseDefaultFiles` hace que la raíz, `/`, devuelva `wwwroot\index.html`, y `UseStaticFiles` sirve los archivos de `wwwroot`. Por eso la información del proyecto está en `/info`.
   - **Endpoints:** cada `app.MapGet(...)` o `app.MapPost(...)` asocia una ruta con la función que la atiende. `GET /buscar` y `POST /preguntar` controlan el modo con Buscador.ElegirModo y, si no existe, devuelven `Results.BadRequest`: un error 400 con el motivo.
   - **Arranque:** `app.Run()` deja la API escuchando en la dirección de `launchSettings.json` hasta que se la frena con Ctrl+C.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-5-vectores.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-5-vectores, fase-6-hibrida.
 
-### GET /
+### GET /info
 
 - **Recibe:** nada.
 - **Devuelve:** un JSON con el nombre del proyecto, la fase y la versión de .NET. El proyecto y la fase salen de la configuración (`Rag:Proyecto` y `Rag:Fase`).
-- **La atiende:** una función sin nombre (lambda) declarada en `Program.cs` con `app.MapGet("/", ...)`.
+- **La atiende:** una función sin nombre (lambda) declarada en `Program.cs` con `app.MapGet("/info", ...)`.
 - **Desde:** fase-0-base.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-6-hibrida (pasa de `/` a `/info`: la raíz muestra la página de la demo).
 
 ### POST /indexar
 
@@ -600,19 +615,19 @@ RAG-BASICO\
 
 ### GET /buscar
 
-- **Recibe:** la pregunta en el parámetro `q` de la dirección y, si se quiere, el modo en `modo`: `palabras`, que es el modo por defecto, o `vectores`. Por ejemplo: `/buscar?q=requisitos reintegro&modo=vectores`.
+- **Recibe:** la pregunta en el parámetro `q` de la dirección y, si se quiere, el modo en `modo`: `palabras`, `vectores` o `hibrida`, que es el modo por defecto. Por ejemplo: `/buscar?q=requisitos reintegro&modo=palabras`.
 - **Devuelve:** la lista de fragmentos encontrados con ese modo, hasta `Rag:TopK`. Si falta `q`, o si el modo no existe, un error 400.
 - **La atiende:** una función de `Program.cs` que controla el modo con Buscador.ElegirModo y llama a Buscador.BuscarAsync.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-5-vectores (el parámetro `modo`).
+- **Cambió en:** fase-5-vectores (el parámetro `modo`), fase-6-hibrida (la híbrida, que pasa a ser el modo por defecto).
 
 ### POST /preguntar
 
-- **Recibe:** un JSON con la pregunta y, si se quiere, el modo: `{ "pregunta": "...", "modo": "vectores" }`, que ASP.NET Core convierte en un `PedidoPregunta`. Sin modo, busca por palabras.
+- **Recibe:** un JSON con la pregunta y, si se quiere, el modo: `{ "pregunta": "...", "modo": "palabras" }`, que ASP.NET Core convierte en un `PedidoPregunta`. Sin modo, usa la híbrida.
 - **Devuelve:** el `RespuestaRag`: la respuesta de Qwen con citas `[n]`, las fuentes y los tiempos. Si los documentos no alcanzan, la frase "No encontré esa información en los documentos." sin fuentes. Si el modo no existe, un error 400 con el motivo.
 - **La atiende:** una función de `Program.cs` que controla el modo con Buscador.ElegirModo y llama a Redactor.ResponderAsync.
 - **Desde:** fase-1-ollama.
-- **Cambió en:** fase-2-rag-minimo (responde con los documentos, no con lo que sabe Qwen), fase-5-vectores (el modo).
+- **Cambió en:** fase-2-rag-minimo (responde con los documentos, no con lo que sabe Qwen), fase-5-vectores (el modo), fase-6-hibrida (la híbrida por defecto).
 
 ### POST /evaluar
 
@@ -620,7 +635,7 @@ RAG-BASICO\
 - **Devuelve:** el `InformeEvaluacion`: una fila por modo con "1er lugar", "entre los 5", ms promedio y las preguntas sin respuesta bien contestadas; el detalle por pregunta, las fallas y los avisos.
 - **La atiende:** una función de `Program.cs` que llama a Evaluador.CorrerAsync.
 - **Desde:** fase-3-medicion.
-- **Cambió en:** fase-5-vectores (compara palabras contra vectores).
+- **Cambió en:** fase-5-vectores (compara todos los modos de `Buscador.Modos`).
 
 ## RagBasico.Api\Properties\launchSettings.json
 
@@ -628,7 +643,7 @@ RAG-BASICO\
 - **Contiene:** un solo perfil, `http`: escucha en `http://127.0.0.1:508N`, donde N es el número de la fase, con el entorno `Development`, y abre el navegador. Así dos fases pueden correr a la vez. El template traía también un perfil `https` con puertos al azar, que se sacó porque chocaría entre fases.
 - **Por qué 127.0.0.1:** es la misma dirección que usan Ollama y Qdrant, que escuchan solo en IPv4, así todo el proyecto usa una sola. La consecuencia es que la API también escucha solo en IPv4: se la llama con `http://127.0.0.1:508N`, como hacen el archivo `.http` y el navegador que abre el perfil. Con `localhost`, los clientes de .NET (PowerShell, `WebClient`, `HttpClient`) prueban primero IPv6 y tardan unos 2 segundos más en conectarse.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida.
 
 ## RagBasico.Api\RagBasico.Api.csproj
 
@@ -645,7 +660,7 @@ RAG-BASICO\
 - **Responsabilidad:** los pedidos de prueba de la fase, listos para mandar con "Send Request" desde Visual Studio, o desde VS Code con la extensión "REST Client".
 - **Contiene:** la variable `@host`, con la dirección y el puerto de la fase, y un pedido por cada endpoint de esta versión.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida.
 
 ## RagBasico.Api\Redactor.cs
 
@@ -712,6 +727,31 @@ RAG-BASICO\
 - **Desde:** fase-3-medicion.
 - **Cambió en:** nada todavía.
 
+## RagBasico.Api\Rrf.cs
+
+- **Responsabilidad:** mezclar listas de resultados de búsquedas distintas por el puesto de cada fragmento, con RRF (Reciprocal Rank Fusion).
+- **Contiene:** la clase `Rrf`, con la constante pública `K` (60).
+- **Desde:** fase-6-hibrida.
+- **Cambió en:** nada todavía.
+
+### Clase Rrf
+
+- **Responsabilidad:** la mezcla de la búsqueda híbrida. Es estática: no guarda nada. No mira los puntajes de cada búsqueda, porque el `RANK` del Full-Text y la distancia coseno no se pueden comparar entre sí; mira en qué puesto quedó cada fragmento.
+- **Recibe en el constructor:** nada; una clase estática no tiene constructor.
+- **La registra:** nadie. Se usa directo: `Rrf.Mezclar(...)`.
+- **Desde:** fase-6-hibrida.
+- **Cambió en:** nada todavía.
+
+### Rrf.Mezclar(listas, topK)
+
+- **Qué hace:** cada fragmento suma 1 / (60 + puesto) por cada lista en la que aparece, con el puesto contado desde 1. Así, un fragmento tercero en las dos listas (2/63) le gana al primero de una sola (1/61): lo que aparece bien en las dos búsquedas sube. Si dos empatan, queda primero el que apareció antes, porque el ordenamiento de LINQ es estable.
+- **Recibe:** las listas de fragmentos, cada una ordenada de mejor a peor, y cuántos devolver.
+- **Devuelve:** los `topK` fragmentos de mayor puntaje, sin repetir.
+- **Efectos:** ninguno.
+- **La llaman:** Buscador.HibridaAsync.
+- **Desde:** fase-6-hibrida.
+- **Cambió en:** nada todavía.
+
 ## RagBasico.Api\Vectorizador.cs
 
 - **Responsabilidad:** calcular el vector de cada fragmento que todavía no lo tiene y guardarlo en `rag.Fragmento`.
@@ -772,7 +812,19 @@ RAG-BASICO\
 
 - **Responsabilidad:** la configuración de la API. Cada clave está explicada en `docs\arquitectura.md`.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida.
+
+## RagBasico.Api\wwwroot\index.html
+
+- **Responsabilidad:** la página de la demo: una caja para la pregunta, el selector de modo (híbrida, solo palabras o solo vectores) y la respuesta con sus fuentes y los tiempos. La sirve la propia API en la raíz, `http://127.0.0.1:5086/`.
+- **Contiene:** HTML, el estilo y un script, todo en el mismo archivo y sin nada de internet, para que la demo ande sin conexión. El script:
+  - manda la pregunta y el modo a `POST /preguntar` con `fetch`;
+  - muestra el texto con `textContent` y no con `innerHTML`, así el texto de un documento nunca se interpreta como HTML;
+  - lista las fuentes y atenúa las que se le pasaron al modelo pero no citó;
+  - no muestra el bloque de fuentes cuando la respuesta es "no encontré", porque cinco documentos debajo de "no encontré" confunden;
+  - muestra el error de la API, por ejemplo el de un modo que no existe.
+- **Desde:** fase-6-hibrida.
+- **Cambió en:** nada todavía.
 
 ## RagBasico.slnx
 
@@ -785,7 +837,7 @@ RAG-BASICO\
 
 - **Responsabilidad:** cómo se arma esta versión: las piezas, los recorridos paso a paso, las tablas, la configuración y lo que está fuera del repo.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida.
 
 ## docs\erratas.md
 
@@ -829,11 +881,17 @@ RAG-BASICO\
 - **Desde:** fase-5-vectores.
 - **Cambió en:** nada todavía.
 
+## docs\fases\fase-6-hibrida.md
+
+- **Responsabilidad:** qué agregó la fase 6, en qué orden leerla, cómo probarla, qué se midió y qué se decidió.
+- **Desde:** fase-6-hibrida.
+- **Cambió en:** nada todavía.
+
 ## docs\responsabilidades.md
 
 - **Responsabilidad:** este documento: qué hace cada archivo, clase, función y endpoint, y quién lo usa.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida.
 
 ## docs\worktrees.md
 
