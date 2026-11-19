@@ -14,6 +14,11 @@ public sealed class Vectorizador
     private readonly string _conexion;
     private readonly int _lote;
 
+    // Lo que va de la corrida. Los suma CalcularYGuardarAsync al guardar y GuardarLoteAsync al anotar un error,
+    // así no se pierden si la corrida se corta a la mitad de un lote. Hay un Vectorizador nuevo por pedido.
+    private int _calculados;
+    private int _fallados;
+
     /// <summary>Recibe el cliente de Ollama y el sincronizador, para subir los vectores nuevos a Qdrant, y lee de la configuración la conexión y cuántos fragmentos mandar en cada pedido.</summary>
     public Vectorizador(Ollama ollama, Sincronizador sincronizador, IConfiguration config)
     {
@@ -28,8 +33,8 @@ public sealed class Vectorizador
     {
         Stopwatch reloj = Stopwatch.StartNew();
         List<string> detalle = new List<string>();
-        int calculados = 0;
-        int fallados = 0;
+        _calculados = 0;
+        _fallados = 0;
         int pendientes;
         using (SqlConnection conexion = new SqlConnection(_conexion))
         {
@@ -51,14 +56,14 @@ public sealed class Vectorizador
                 }
                 ultimo = lote[lote.Count - 1].FragmentoId;
 
-                int guardados;
+                int calculadosAntes = _calculados;
                 try
                 {
-                    guardados = await GuardarLoteAsync(conexion, lote, detalle, ct);
+                    await GuardarLoteAsync(conexion, lote, detalle, ct);
                 }
                 catch (Exception ex)
                 {
-                    if (ct.IsCancellationRequested || !EsCaida(ex))
+                    if (ct.IsCancellationRequested || !Errores.EsCaida(ex))
                     {
                         throw;
                     }
@@ -66,12 +71,9 @@ public sealed class Vectorizador
                     detalle.Add("ERROR: Ollama no responde o tardó más de Ollama:SegundosDeEspera (" + ex.Message + "). Se cortó la corrida; los fragmentos que faltan quedan para el próximo POST /vectores.");
                     break;
                 }
-                calculados += guardados;
-                fallados += lote.Count - guardados;
-
                 // Un lote entero que falla puede ser de textos que Ollama no acepta, y se sigue. Cinco seguidos ya no:
                 // es algo general, como la base, y seguir solo llenaría el detalle de errores iguales.
-                lotesFallidosSeguidos = guardados == 0 ? lotesFallidosSeguidos + 1 : 0;
+                lotesFallidosSeguidos = _calculados == calculadosAntes ? lotesFallidosSeguidos + 1 : 0;
                 if (lotesFallidosSeguidos == 5)
                 {
                     detalle.Add("ERROR: fallaron todos los fragmentos de 5 lotes seguidos. Se cortó la corrida: el problema no parece de un fragmento; revisá los errores de arriba.");
@@ -82,15 +84,16 @@ public sealed class Vectorizador
                 "SELECT COUNT(*) FROM rag.Fragmento WHERE Embedding IS NULL;", cancellationToken: ct));
         }
 
-        if (calculados == 0 && fallados == 0)
+        // SIN CAMBIOS solo si de verdad no queda nada: una corrida que se cortó deja pendientes, y eso no es "sin cambios".
+        if (_calculados == 0 && _fallados == 0 && pendientes == 0)
         {
             detalle.Add("SIN CAMBIOS: todos los fragmentos ya tenían vector.");
         }
         // Los vectores nuevos se suben a Qdrant. Si Qdrant estuvo apagado, también sube los que le faltaban de antes.
         await _sincronizador.PonerAlDiaAsync(detalle, ct);
         double segundos = reloj.Elapsed.TotalSeconds;
-        double porSegundo = segundos > 0 ? Math.Round(calculados / segundos, 1) : 0;
-        return new InformeVectores(calculados, fallados, pendientes, porSegundo, Indexador.FormatearTiempo(reloj.Elapsed), detalle);
+        double porSegundo = segundos > 0 ? Math.Round(_calculados / segundos, 1) : 0;
+        return new InformeVectores(_calculados, _fallados, pendientes, porSegundo, Indexador.FormatearTiempo(reloj.Elapsed), detalle);
     }
 
     /// <summary>Escribe un vector como lo recibe SQL Server: un arreglo JSON con punto decimal, sin importar la configuración regional de Windows, que en castellano usa coma.</summary>
@@ -110,51 +113,43 @@ public sealed class Vectorizador
         return texto.ToString();
     }
 
-    /// <summary>Dice si un error muestra que Ollama no responde: no se pudo conectar, o no contestó a tiempo. El error de un fragmento en particular, como un texto que Ollama no acepta, no lo es.</summary>
-    public static bool EsCaida(Exception error)
-    {
-        return error is HttpRequestException || (error is TaskCanceledException && error.InnerException is TimeoutException);
-    }
-
-    /// <summary>Calcula y guarda los vectores de un lote en un solo pedido a Ollama. Si falla, prueba los fragmentos de a uno, así un fragmento con problemas no deja sin vector a los demás. Si Ollama no responde, no prueba más: lanza el error. Devuelve cuántos guardó.</summary>
-    private async Task<int> GuardarLoteAsync(SqlConnection conexion, List<Fragmento> lote, List<string> detalle, CancellationToken ct)
+    /// <summary>Calcula y guarda los vectores de un lote en un solo pedido a Ollama. Si falla, prueba los fragmentos de a uno, así un fragmento con problemas no deja sin vector a los demás, y cuenta y anota cada uno que falla. Si Ollama no responde, no prueba más: lanza el error.</summary>
+    private async Task GuardarLoteAsync(SqlConnection conexion, List<Fragmento> lote, List<string> detalle, CancellationToken ct)
     {
         try
         {
             await CalcularYGuardarAsync(conexion, lote, ct);
-            return lote.Count;
+            return;
         }
         catch (Exception ex)
         {
             // Si se canceló el pedido, por ejemplo porque se cerró la API, o si Ollama no responde, se corta todo.
             // Cualquier otro error es de este lote: se prueba de a uno, para encontrar el fragmento que falla.
-            if (ct.IsCancellationRequested || EsCaida(ex))
+            if (ct.IsCancellationRequested || Errores.EsCaida(ex))
             {
                 throw;
             }
         }
 
-        int guardados = 0;
         foreach (Fragmento fragmento in lote)
         {
             try
             {
                 await CalcularYGuardarAsync(conexion, new List<Fragmento> { fragmento }, ct);
-                guardados++;
             }
             catch (Exception ex)
             {
-                if (ct.IsCancellationRequested || EsCaida(ex))
+                if (ct.IsCancellationRequested || Errores.EsCaida(ex))
                 {
                     throw;
                 }
+                _fallados++;
                 detalle.Add("ERROR en el fragmento " + fragmento.FragmentoId + " de " + fragmento.Archivo + ": " + ex.Message);
             }
         }
-        return guardados;
     }
 
-    /// <summary>Le pide a Ollama los vectores de los fragmentos en un solo pedido y los guarda en rag.Fragmento, todos en una transacción.</summary>
+    /// <summary>Le pide a Ollama los vectores de los fragmentos en un solo pedido y los guarda en rag.Fragmento, todos en una transacción. Después de confirmarla, los suma a los calculados.</summary>
     private async Task CalcularYGuardarAsync(SqlConnection conexion, List<Fragmento> fragmentos, CancellationToken ct)
     {
         List<float[]> vectores = await _ollama.EmbeddingsAsync(fragmentos.Select(f => f.Texto).ToList(), ct);
@@ -170,5 +165,6 @@ public sealed class Vectorizador
             }
             transaccion.Commit();
         }
+        _calculados += fragmentos.Count;
     }
 }
