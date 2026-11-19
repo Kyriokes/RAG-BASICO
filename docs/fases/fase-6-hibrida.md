@@ -29,7 +29,7 @@ Endpoints: `GET /` pasa a ser la página y la información del proyecto pasa a `
 
 ## 4. Cómo se corre y se prueba
 
-1. Crear la base `RagBasico_F6` con `scripts\crear-base.ps1`, arrancar la API (el navegador abre la página), `POST /indexar` y `POST /vectores`.
+1. Crear la base `RagBasico_F6` con `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1 -Servidor 'lpc:localhost\SQLEXPRESS'` (sin `-Servidor`, el sqlcmd que instala winget no se conecta: está en `docs\erratas.md`), arrancar la API (con F5 en Visual Studio el navegador abre la página; con `dotnet run`, se abre a mano), `POST /indexar` y `POST /vectores`.
 2. `POST /evaluar`: la tabla de los tres modos. La híbrida tendría que quedar igual o mejor que la mejor de las otras dos en "entre los 5".
 3. Elegir la pregunta de la demo con el detalle por pregunta del examen: una dicha con otras palabras que tenga puesto 0 en `palabras` y un puesto de 1 a 5 en `hibrida`. Probarla en la página con los dos modos.
 4. Revisar a mano 10 respuestas de la página: ¿cita el fragmento correcto? ¿Inventa algo? Anotarlo en la sección 5.
@@ -60,11 +60,11 @@ Versiones: las mismas de la fase 5. Commit medido: el último de `fase-6-hibrida
 | La página dentro de la API, en `wwwroot` | Un proyecto aparte, o un framework de JavaScript | Un solo programa que arrancar, y un archivo que se lee entero |
 | La página sin nada de internet | Una biblioteca de estilos de un CDN | La demo tiene que andar sin conexión |
 | `textContent` para el texto de la respuesta | `innerHTML` | Un documento con HTML adentro no puede cambiar la página |
-| La información del proyecto pasa a `/info` | Dejarla en `/` y la página en otra dirección | El navegador abre la raíz: la demo arranca sola |
+| La información del proyecto pasa a `/info` | Dejarla en `/` y la página en otra dirección | Con F5 en Visual Studio, el navegador abre la raíz: la demo arranca sola |
 
 ## 7. Limitaciones conocidas
 
 - Si Ollama no responde, la híbrida falla entera, porque necesita el vector de la pregunta. En la fase 7 la híbrida aprende a seguir sin Qdrant, pero no sin Ollama.
 - El examen mide si el documento correcto está entre los 5, no si la respuesta es buena: por eso la revisión a mano.
 - La página no guarda el historial de preguntas; cada consulta queda en `rag.Consulta`.
-- Esta versión no se probó contra SQL Server ni Ollama reales: SQL Server está instalado pero su servicio estaba detenido, y Ollama no estaba instalado.
+- Esta versión no se probó contra SQL Server ni Ollama reales: el servicio de SQL Server estaba detenido.

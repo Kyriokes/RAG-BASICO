@@ -9,7 +9,7 @@ GET {{host}}/info
 GET {{host}}/salud
 
 ### Poner la base al día con la carpeta: carga los PDF nuevos y cambiados, y borra los que ya no están
-# La segunda vez seguida tiene que decir SIN CAMBIOS.
+# La segunda vez seguida tiene que decir SIN CAMBIOS, salvo que haya PDF SIN TEXTO o con ERROR: esos se repiten en cada carga.
 POST {{host}}/indexar
 
 ### Calcular el vector de cada fragmento que no lo tiene, y subirlo a Qdrant. La segunda vez seguida, SIN CAMBIOS

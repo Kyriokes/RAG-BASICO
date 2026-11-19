@@ -40,7 +40,7 @@ Endpoints: `POST /indexar` y `GET /buscar`; `POST /preguntar` cambia. Tablas: `r
 
 Requisitos, además de los de la fase 1: SQL Server 2025 Express con Full-Text, sqlcmd, los PDF en una carpeta y la variable de entorno `Rag__CarpetaDocumentos` apuntando a ella.
 
-1. Crear la base: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1`.
+1. Crear la base: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1 -Servidor 'lpc:localhost\SQLEXPRESS'`. Sin `-Servidor`, el sqlcmd que instala winget no se conecta (está en `docs\erratas.md`).
 2. Arrancar la API: `cd RagBasico.Api` y `dotnet run`. El log tiene que mostrar la carpeta de PDF.
 3. `POST /indexar`: tiene que devolver los documentos y fragmentos cargados, y una línea por archivo.
 4. Esperar a que el Full-Text termine (en `sql\consultas-utiles.sql`, Pendientes y Estado en 0).
@@ -88,4 +88,4 @@ Versiones:
 - Las ventanas fijas pueden cortar una idea al medio o mezclar el final de una sección con el principio de otra. Lo resuelve la fase 4.
 - La búsqueda por palabras no encuentra lo dicho con otras palabras ("devolver la plata" no encuentra "reintegro"). Lo resuelve la fase 5.
 - Todavía no hay forma de medir qué tan bien busca. La da la fase 3.
-- Esta versión no se probó contra SQL Server ni Ollama reales, porque no estaban instalados.
+- Esta versión no se probó contra SQL Server ni Ollama reales.

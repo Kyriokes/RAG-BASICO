@@ -70,7 +70,7 @@ O abrir `RagBasico.slnx` de esa carpeta en Visual Studio y apretar F5. Cada fase
 
 Desde la fase 2, cada fase usa su propia base de datos, que hay que preparar una vez:
 
-1. `scripts\crear-base.ps1`, desde la fase 2.
+1. `scripts\crear-base.ps1`, desde la fase 2. En las fases 2 a 6, con `-Servidor 'lpc:localhost\SQLEXPRESS'`: sin eso, el sqlcmd que instala winget no se conecta (está en [erratas.md](erratas.md)).
 2. `POST /indexar`, desde la fase 2.
 3. `POST /vectores`, desde la fase 5.
 4. `POST /qdrant/reconstruir`, desde la fase 7.

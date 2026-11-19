@@ -39,7 +39,7 @@ Endpoints: `POST /vectores`; `GET /buscar` y `POST /preguntar` reciben el modo. 
 ## 4. Cómo se corre y se prueba
 
 1. Bajar el modelo: `ollama pull qwen3-embedding:0.6b`.
-2. Crear la base `RagBasico_F5` con `scripts\crear-base.ps1`, arrancar la API, `POST /indexar` y `POST /vectores`. Anotar los fragmentos por segundo.
+2. Crear la base `RagBasico_F5` con `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1 -Servidor 'lpc:localhost\SQLEXPRESS'` (sin `-Servidor`, el sqlcmd que instala winget no se conecta: está en `docs\erratas.md`), arrancar la API, `POST /indexar` y `POST /vectores`. Anotar los fragmentos por segundo.
 3. `POST /vectores` otra vez: tiene que decir `SIN CAMBIOS`, con `Pendientes` en 0.
 4. En SSMS, la consulta de los vecinos de `sql\consultas-utiles.sql`: los cinco más cercanos tienen que ser del mismo tema.
 5. `GET /buscar` con la misma pregunta en los dos modos, y una pregunta dicha con otras palabras.
@@ -81,4 +81,4 @@ Versiones: `qwen3-embedding:0.6b`, más las de la fase 2. Commit medido: el últ
 - Si se cambia el modelo de embeddings, hay que vaciar los vectores (`UPDATE rag.Fragmento SET Embedding = NULL;`) y volver a correr `/vectores`. Mezclar vectores de dos modelos da resultados sin sentido y ningún error.
 - Ollama corta en silencio los textos más largos que el contexto del modelo. Con fragmentos de unas 300 palabras no pasa.
 - La búsqueda por vectores no encuentra bien números exactos, códigos ni nombres propios raros: para eso sigue estando la búsqueda por palabras, y en la fase 6 se combinan.
-- Esta versión no se probó contra SQL Server ni Ollama reales: SQL Server está instalado pero su servicio estaba detenido, y Ollama no estaba instalado. `VECTOR_DISTANCE` y el `CAST` del JSON se escribieron según la documentación de SQL Server 2025, sin correrlos.
+- Esta versión no se probó contra SQL Server ni Ollama reales: el servicio de SQL Server estaba detenido. `VECTOR_DISTANCE` y el `CAST` del JSON se escribieron según la documentación de SQL Server 2025, sin correrlos.

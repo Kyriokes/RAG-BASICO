@@ -13,10 +13,14 @@ Cada fase agrega una pieza y queda marcada con su branch, así el proyecto se pu
 - Ollama corriendo, con los modelos `qwen3.5:4b` y `qwen3-embedding:0.6b`.
 - Qdrant 1.20.2 en `..\RAG-BASICO-datos\qdrant\`, arrancado con `scripts\iniciar-qdrant.ps1`.
 - Los PDF en una carpeta, y la variable de entorno de usuario `Rag__CarpetaDocumentos` apuntando a ella.
-- Windows PowerShell 5.1, para los scripts.
+- Windows PowerShell 5.1 y git 2.31 o posterior, para los scripts.
 - Para probar los pedidos del archivo `.http`: Visual Studio, o VS Code con la extensión "REST Client".
 
+Cómo instalar cada cosa, en qué orden y cómo comprobar que anda: [docs/instalacion.md](docs/instalacion.md).
+
 ## Cómo correr esta fase
+
+SQL Server tiene que estar andando. Si su servicio arranca a mano, como administrador: `Start-Service 'MSSQL$SQLEXPRESS'`.
 
 Desde la raíz del repo, una sola vez:
 
@@ -25,16 +29,18 @@ Desde la raíz del repo, una sola vez:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1
 ```
 
-Después de crear la variable, cerrá y volvé a abrir Visual Studio y las terminales. Para arrancar la API:
+Después de crear la variable, cerrá y volvé a abrir Visual Studio, VS Code (todas sus ventanas) y las consolas: los que estaban abiertos no la ven. Para arrancar la API:
 
 ```powershell
 cd RagBasico.Api
 dotnet run
 ```
 
-Antes, en otra consola, arrancá Qdrant: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\iniciar-qdrant.ps1`. El navegador abre la página de la demo, `http://127.0.0.1:5087/`, y `GET /salud` dice si anda todo. Antes de preguntar, mandá los pedidos de `RagBasico.Api\RagBasico.Api.http` en orden: `POST /indexar` pone la base al día con la carpeta (la segunda vez seguida dice `SIN CAMBIOS`), `POST /vectores` calcula los vectores y los sube a Qdrant, `GET /buscar` muestra los fragmentos que encuentra en cada modo, `POST /preguntar` responde con citas y `POST /evaluar` corre el examen.
+Antes, en otra consola, arrancá Qdrant: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\iniciar-qdrant.ps1`. La página de la demo está en `http://127.0.0.1:5087/` (con F5 en Visual Studio se abre sola; con `dotnet run`, abrila a mano), y `GET /salud` dice si anda todo. Antes de preguntar, mandá los pedidos de `RagBasico.Api\RagBasico.Api.http` en orden: `POST /indexar` pone la base al día con la carpeta (la segunda vez seguida dice `SIN CAMBIOS`), `POST /vectores` calcula los vectores y los sube a Qdrant, `GET /buscar` muestra los fragmentos que encuentra en cada modo, `POST /preguntar` responde con citas y `POST /evaluar` corre el examen.
 
 El examen va en `examen.csv`, con el formato de `examen.ejemplo.csv`. Para congelar los PDF del examen: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-manifiesto.ps1`.
+
+Si en la carpeta hay PDF escaneados o que no se pudieron abrir, `POST /indexar` los vuelve a informar en cada carga (`SIN TEXTO` o `ERROR`), así que la segunda vez no dice `SIN CAMBIOS`: alcanza con que `Cargados` y `Borrados` den 0.
 
 Para controlar que la documentación coincida con el código, desde la raíz del repo:
 
@@ -69,6 +75,7 @@ El paso a paso, también para un clon nuevo, está en [docs/worktrees.md](docs/w
 
 ## Documentación
 
+- [docs/instalacion.md](docs/instalacion.md): qué instalar, en qué orden, cómo comprobar que anda y qué hacer si algo falla.
 - [docs/arquitectura.md](docs/arquitectura.md): las piezas, los recorridos, las tablas y la configuración de esta versión.
 - [docs/responsabilidades.md](docs/responsabilidades.md): qué hace cada archivo, clase, función y endpoint.
 - [docs/worktrees.md](docs/worktrees.md): cómo abrir y correr cada fase en su carpeta.

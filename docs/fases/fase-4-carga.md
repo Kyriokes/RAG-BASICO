@@ -31,13 +31,13 @@ Endpoints: ninguno nuevo; `POST /indexar` cambió lo que hace y lo que devuelve.
 
 ## 4. Cómo se corre y se prueba
 
-1. Crear la base `RagBasico_F4` con `scripts\crear-base.ps1` y arrancar la API.
+1. Crear la base `RagBasico_F4` con `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1 -Servidor 'lpc:localhost\SQLEXPRESS'` (sin `-Servidor`, el sqlcmd que instala winget no se conecta: está en `docs\erratas.md`) y arrancar la API.
 2. `POST /indexar`: la primera vez carga todo, con una línea `NUEVO` por PDF. Revisar las líneas `SIN TEXTO` y `TEXTO DUDOSO`: los fragmentos de un documento dudoso se miran en SSMS con la consulta de `sql\consultas-utiles.sql`.
-3. `POST /indexar` otra vez: tiene que decir `SIN CAMBIOS` y tardar mucho menos.
-4. Probar el borrado con una carpeta y una base aparte, para no tocar las del examen. En una sola consola, desde la raíz del repo:
+3. `POST /indexar` otra vez: tiene que decir `SIN CAMBIOS` y tardar mucho menos. Si en el paso 2 hubo PDF `SIN TEXTO` o con `ERROR`, esos no quedaron en la base y vuelven a salir en cada carga, así que la línea `SIN CAMBIOS` no aparece: alcanza con que `Cargados` y `Borrados` den 0.
+4. Probar el borrado con una carpeta y una base aparte, para no tocar las del examen. Antes, frenar la API que quedó corriendo (Ctrl+C en su consola, o Shift+F5 en Visual Studio): la de prueba usa el mismo puerto. En una sola consola, desde la raíz del repo:
 
    ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1 -Base RagBasico_F4_Prueba
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1 -Base RagBasico_F4_Prueba -Servidor 'lpc:localhost\SQLEXPRESS'
    $env:Rag__CarpetaDocumentos = 'F:\RAG-BASICO-datos\documentos-prueba'
    $env:ConnectionStrings__Rag = 'Server=localhost\SQLEXPRESS;Database=RagBasico_F4_Prueba;Integrated Security=True;TrustServerCertificate=True'
    cd RagBasico.Api
@@ -64,7 +64,7 @@ Versiones: las mismas de la fase 2. Commit medido: el último de `fase-4-carga`.
 
 | Decisión | Alternativas descartadas | Por qué |
 |---|---|---|
-| Huella de los bytes del PDF más los parámetros de corte | Huella del texto extraído; fecha de modificación del archivo | La del texto obliga a leer cada PDF para saber si cambió, y no cambia si cambia el tamaño de fragmento. La fecha cambia al copiar un archivo sin cambiarlo |
+| Huella de los bytes del PDF más los parámetros de corte | Huella del texto extraído; fecha de modificación del archivo | La del texto obliga a leer cada PDF para saber si cambió, y no cambia si cambia el tamaño de fragmento. La fecha no dice lo que importa: bajar de nuevo o descomprimir un PDF le cambia la fecha sin cambiarlo, pisarlo con una versión vieja deja una fecha anterior, y no sabe nada del corte |
 | La versión de PdfPig y la del `Chunker` entran en la huella | Recargar a mano cuando cambian | Otra versión de PdfPig puede sacar otro texto del mismo PDF; olvidarse de recargar dejaría la base con un corte viejo sin ningún aviso |
 | Si la carpeta no tiene ningún PDF, no se borra nada | Borrar lo que no está, siempre | Una carpeta vacía suele ser un disco desconectado o una ruta mal escrita, no la decisión de borrar todo |
 | Borrar y volver a insertar un PDF cambiado, en una transacción | Actualizar los fragmentos uno por uno | Un PDF cambiado puede tener otra cantidad de fragmentos. En una transacción, si algo falla queda la versión anterior entera |
@@ -81,4 +81,4 @@ Versiones: las mismas de la fase 2. Commit medido: el último de `fase-4-carga`.
 - Una presentación exportada a PDF, con pocas palabras por página, puede tomarse como escaneada.
 - Dos `/indexar` al mismo tiempo pueden chocar. Es una tarea de mantenimiento que corre una persona.
 - Calcular la huella obliga a leer todos los bytes de cada PDF en cada corrida, aunque no cambien. Es mucho más rápido que sacar el texto y cortarlo, pero con 50.000 archivos en una carpeta de red se nota.
-- Esta versión no se probó contra SQL Server ni Ollama reales: SQL Server está instalado pero su servicio estaba detenido, y Ollama no estaba instalado.
+- Esta versión no se probó contra SQL Server ni Ollama reales: el servicio de SQL Server estaba detenido.

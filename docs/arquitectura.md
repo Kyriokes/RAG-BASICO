@@ -28,7 +28,7 @@ SQL Server es la base que manda: tiene los textos y los vectores. Qdrant tiene u
 
 **Congelar el corpus, una vez:** `scripts\crear-manifiesto.ps1` anota en `documentos.csv` el sha256 de cada PDF. Antes de medir, `-Verificar` controla que la carpeta no haya cambiado.
 
-**Arrancar la API** (`dotnet run` en `RagBasico.Api`, o F5): registra los servicios y muestra en el log la carpeta de PDF o avisa que no existe. Cuando ya está escuchando, carga los dos modelos en Ollama en segundo plano, así la primera pregunta no espera la carga. El navegador abre la página de la demo, en la raíz.
+**Arrancar la API** (`dotnet run` en `RagBasico.Api`, o F5): registra los servicios y muestra en el log la carpeta de PDF o avisa que no existe. Cuando ya está escuchando, carga los dos modelos en Ollama en segundo plano, así la primera pregunta no espera la carga. La página de la demo está en la raíz: con F5 en Visual Studio se abre sola; con `dotnet run`, se abre a mano.
 
 **Revisar la salud (`GET /salud`):** cinco chequeos: SQL Server (documentos, fragmentos y vectores), el Full-Text sin cambios pendientes, los dos modelos instalados en Ollama, la dimensión de los vectores (1024) y Qdrant (versión, colección y vectores en el índice). Si falla algo sin lo que la demo no anda, el estado es `error` y el código HTTP 503. Si falta Qdrant, es un `aviso`: la demo sigue.
 
@@ -84,7 +84,7 @@ La colección se crea con vectores de 1024 números comparados por coseno, y con
 - **Por palabras:** `FREETEXTTABLE` corta la pregunta en palabras, busca sus plurales y conjugaciones en el índice, puntúa cada fragmento y devuelve los 5 mejores.
 - **Por vectores, en SQL Server:** Ollama calcula el vector de la pregunta, con la instrucción en inglés de `Ollama:InstruccionPregunta` antes (`Instruct: ...` y `Query:` pegado a la pregunta). SQL Server ordena todos los fragmentos con vector por `VECTOR_DISTANCE('cosine', ...)` y devuelve los 5 más cercanos. Es una búsqueda exacta: recorre todos los vectores.
 - **Por vectores, en Qdrant (`vectores-qdrant`):** el mismo vector de la pregunta; Qdrant devuelve los números de los 5 fragmentos más cercanos usando el índice HNSW, y SQL Server sus textos, en ese orden. Si Qdrant no responde, o la colección está vacía, da error: este modo existe para medir Qdrant.
-- **Híbrida**, el modo por defecto: arranca las dos búsquedas al mismo tiempo, por palabras y por vectores en Qdrant, pidiendo 20 candidatos a cada una (`Rag:CandidatosHibrida`), y espera a las dos con `Task.WhenAll`: tarda lo que la más lenta, no la suma. Si Qdrant no responde, o no tiene vectores, la parte por vectores usa SQL con el mismo vector de la pregunta, y la respuesta lleva el aviso. `Rrf.Mezclar` mezcla las dos listas por puesto: cada fragmento suma 1 / (60 + puesto) en cada lista donde aparece, y quedan los 5 de mayor puntaje.
+- **Híbrida**, el modo por defecto: arranca las dos búsquedas al mismo tiempo, por palabras y por vectores en Qdrant, pidiendo 20 candidatos a cada una (`Rag:CandidatosHibrida`), y espera a las dos con `Task.WhenAll`: tarda lo que la más lenta, no la suma. Si Qdrant no responde, contesta con un error o no tiene vectores, la parte por vectores usa SQL con el mismo vector de la pregunta, y la respuesta lleva un aviso que dice cuál de las tres pasó. `Rrf.Mezclar` mezcla las dos listas por puesto: cada fragmento suma 1 / (60 + puesto) en cada lista donde aparece, y quedan los 5 de mayor puntaje.
 
 Se mezclan puestos y no puntajes porque el `RANK` del Full-Text y la distancia coseno miden cosas distintas, en escalas distintas: no se pueden sumar.
 
@@ -189,12 +189,14 @@ Fuera de `appsettings.json`:
 
 ## 5. Fuera del repo
 
+Cómo instalar cada pieza y comprobar que anda: [`docs\instalacion.md`](instalacion.md).
+
 | Qué | Dónde | Desde |
 |---|---|---|
 | Una carpeta por fase, creada por `scripts\crear-worktrees.ps1` | Al lado del repo: `..\RAG-BASICO-fases\` | fase-0-base |
 | Ollama y el modelo `qwen3.5:4b` | Instalados en la PC; Ollama escucha en `127.0.0.1:11434` | fase-1-ollama |
 | SQL Server 2025 Express, con Full-Text | Instancia `localhost\SQLEXPRESS`, base `RagBasico_F7` | fase-2-rag-minimo |
 | Los PDF | La carpeta de la variable `Rag__CarpetaDocumentos`, por ejemplo `..\RAG-BASICO-datos\documentos\` | fase-2-rag-minimo |
-| Una carpeta de PDF de prueba y su base, para probar el borrado sin tocar las del examen | `..\RAG-BASICO-datos\documentos-prueba\` y una base aparte, elegidas solo en una consola con `$env:Rag__CarpetaDocumentos` y `$env:ConnectionStrings__Rag` | fase-4-carga |
+| Una carpeta de PDF de prueba, con su base y su colección, para probar el borrado sin tocar las del examen | `..\RAG-BASICO-datos\documentos-prueba\`, una base aparte y, desde la fase 7, la colección `fragmentos_prueba`, elegidas solo en una consola con `$env:Rag__CarpetaDocumentos`, `$env:ConnectionStrings__Rag` y `$env:Qdrant__Coleccion`. Sin la colección aparte, la base de prueba le borraría a Qdrant los vectores del examen | fase-4-carga |
 | El modelo `qwen3-embedding:0.6b` | En Ollama: `ollama pull qwen3-embedding:0.6b` | fase-5-vectores |
 | Qdrant 1.20.2 y sus datos | `qdrant.exe` en `..\RAG-BASICO-datos\qdrant\`, datos en su subcarpeta `storage`. Una sola instancia para todas las fases, con una colección por fase | fase-7-qdrant |

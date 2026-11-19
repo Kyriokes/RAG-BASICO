@@ -36,7 +36,7 @@ Endpoints: `POST /evaluar`. Tablas: `rag.Consulta`.
 
 1. Escribir `examen.csv` siguiendo `examen.ejemplo.csv`: 15 preguntas con las mismas palabras del documento, 15 dichas con otras palabras y 10 sin respuesta. Si podés, que otra persona escriba un tercio sin mirar los PDF.
 2. Congelar el corpus: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-manifiesto.ps1` y completar las URL de `documentos.csv`.
-3. Crear la base `RagBasico_F3` con `scripts\crear-base.ps1`, arrancar la API y `POST /indexar`.
+3. Crear la base `RagBasico_F3` con `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1 -Servidor 'lpc:localhost\SQLEXPRESS'` (sin `-Servidor`, el sqlcmd que instala winget no se conecta: está en `docs\erratas.md`), arrancar la API y `POST /indexar`.
 4. `POST /evaluar`: la tabla, el detalle por pregunta y las fallas.
 5. Para leer los números: "entre los 5" es lo que más importa, porque si el documento está entre los cinco, Qwen tiene con qué responder. Una diferencia de menos de 3 preguntas no prueba nada.
 6. En SSMS, las últimas filas de `rag.Consulta` muestran lo que tardó cada parte de cada respuesta.
@@ -48,7 +48,7 @@ Endpoints: `POST /evaluar`. Tablas: `rag.Consulta`.
 | Compilación | 0 advertencias, 0 errores | `dotnet build` | 18/11/2026 |
 | Lectura del examen y puntaje | 10 de 10 casos: BOM, Excel en ANSI, `;` entre comillas, comillas dobladas, varios documentos, `ninguno`, columnas vacías al final | Un proyecto de prueba aparte | 18/11/2026 |
 | Manifiesto | Arma, verifica, detecta un PDF cambiado y uno de más, y conserva las URL | Un repo temporal | 18/11/2026 |
-| Línea base: "1er lugar" y "entre los 5" por palabras, preguntas sin respuesta bien contestadas | pendiente: se mide con el examen escrito y todo instalado | `POST /evaluar` | pendiente |
+| Línea base: "1er lugar" y "entre los 5" por palabras, preguntas sin respuesta bien contestadas | pendiente: se mide con el examen escrito y todo andando | `POST /evaluar` | pendiente |
 
 Versiones: las mismas de la fase 2. Commit medido: el último de `fase-3-medicion`.
 
@@ -68,4 +68,4 @@ Versiones: las mismas de la fase 2. Commit medido: el último de `fase-3-medicio
 
 - El examen mide la búsqueda y el "no sé", no la calidad de la redacción: eso se revisa a mano en la fase 6.
 - Con un examen chico, las diferencias entre modos son ruido. Con 40 preguntas, menos de 3 de diferencia no prueba nada.
-- Esta versión no se probó contra SQL Server ni Ollama reales, porque no estaban instalados.
+- Esta versión no se probó contra SQL Server ni Ollama reales.

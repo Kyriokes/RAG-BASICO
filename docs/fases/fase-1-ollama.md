@@ -44,7 +44,7 @@ Requisitos, además de los de la fase 0: Ollama instalado y corriendo, con el mo
 |---|---|---|---|
 | Compilación | 0 advertencias, 0 errores | `dotnet build` | 18/11/2026 |
 | `POST /preguntar` con un Ollama de prueba | Manda `think: false` y `stream: false`, y lee los cuatro tiempos | Un servidor falso que imita `/api/chat` | 18/11/2026 |
-| Carga del modelo, tokens por segundo con GPU | pendiente: se mide con Ollama instalado | `POST /preguntar` dos veces | pendiente |
+| Carga del modelo, tokens por segundo con GPU | pendiente: se mide contra Ollama real | `POST /preguntar` dos veces | pendiente |
 
 Versiones:
 
@@ -72,4 +72,4 @@ Versiones:
 - Qwen responde con lo que sabe, no con tus documentos: puede inventar. Lo resuelve la fase 2.
 - Si Ollama no está corriendo, la API devuelve un error 500 con el detalle técnico. Los errores claros llegan en la fase 8.
 - La pregunta no se valida: una vacía igual se manda a Qwen. Lo resuelve la fase 8.
-- Esta versión no se probó contra Ollama real, porque no estaba instalado: solo contra un servidor de prueba que imita su API.
+- Esta versión no se probó contra Ollama real: solo contra un servidor de prueba que imita su API.
