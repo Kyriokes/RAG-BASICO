@@ -297,7 +297,7 @@ public sealed class Indexador
     }
 
     /// <summary>Muestra un tiempo como horas:minutos:segundos, también cuando pasa de 24 horas.</summary>
-    private static string FormatearTiempo(TimeSpan tiempo)
+    public static string FormatearTiempo(TimeSpan tiempo)
     {
         return ((int)tiempo.TotalHours).ToString("00") + ":" + tiempo.Minutes.ToString("00") + ":" + tiempo.Seconds.ToString("00");
     }

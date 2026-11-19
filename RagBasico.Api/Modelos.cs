@@ -31,6 +31,9 @@ public sealed record PlanDeCarga(
     List<ArchivoEnCarpeta> SinCambios,
     List<DocumentoCargado> Borrar);
 
+/// <summary>Lo que devuelve POST /vectores: cuántos vectores se calcularon, cuántos fallaron, cuántos fragmentos quedan sin vector, la velocidad, el tiempo y el detalle.</summary>
+public sealed record InformeVectores(int Calculados, int Fallados, int Pendientes, double FragmentosPorSegundo, string Tiempo, List<string> Detalle);
+
 /// <summary>Una fuente de la respuesta: el número con que la cita el modelo, el archivo y el fragmento.</summary>
 public sealed record Fuente(int Numero, string Archivo, int FragmentoId);
 

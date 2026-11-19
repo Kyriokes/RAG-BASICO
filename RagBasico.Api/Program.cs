@@ -37,6 +37,9 @@ app.MapGet("/", () => new
 app.MapPost("/indexar", async (Indexador indexador, CancellationToken ct) =>
     await indexador.IndexarCarpetaAsync(ct));
 
+app.MapPost("/vectores", async (Vectorizador vectorizador, CancellationToken ct) =>
+    await vectorizador.CalcularPendientesAsync(ct));
+
 app.MapGet("/buscar", async (string q, Buscador buscador, CancellationToken ct) =>
     await buscador.PorPalabrasAsync(q, app.Configuration.GetValue("Rag:TopK", 5), ct));
 
