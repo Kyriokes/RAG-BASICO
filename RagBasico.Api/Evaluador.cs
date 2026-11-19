@@ -72,10 +72,18 @@ public sealed class Evaluador
         try
         {
             EstadoQdrant estado = await _sincronizador.EstadoAsync(ct);
-            bool sinVectores = estado.PuntosEnQdrant == 0 && estado.ConVectorEnSql > 0;
-            if (estado.EstadoColeccion == "no existe" || sinVectores || estado.MuestraCoincide == false)
+            if (estado.EstadoColeccion == "no existe" || estado.PuntosEnQdrant == 0 || estado.MuestraCoincide == false)
             {
-                avisos.Add("El examen se cortó: Qdrant no sirve para medir. " + estado.Mensaje);
+                // Sin vectores en SQL, el mensaje del estado diría "iguales". Si hay fragmentos sin vector, falta /vectores;
+                // si no hay ningún fragmento, falta /indexar: /vectores diría SIN CAMBIOS y el consejo daría vueltas en círculo.
+                string motivo = estado.Mensaje;
+                if (estado.ConVectorEnSql == 0)
+                {
+                    motivo = sinVector > 0
+                        ? "No hay vectores ni en SQL Server ni en Qdrant: corré POST /vectores."
+                        : "No hay fragmentos cargados: corré POST /indexar (revisá Rag__CarpetaDocumentos) y después POST /vectores.";
+                }
+                avisos.Add("El examen se cortó: Qdrant no sirve para medir. " + motivo);
                 return new InformeEvaluacion(resultados, detalle, fallas, avisos);
             }
             if (!estado.Iguales)

@@ -125,7 +125,8 @@ public sealed class Salud
             }
             if (faltan.Count > 0)
             {
-                return new Chequeo(nombre, "error", "Faltan " + string.Join(" y ", faltan) + ". Se bajan con: ollama pull " + faltan[0] + ".");
+                List<string> comandos = faltan.Select(modelo => "ollama pull " + modelo).ToList();
+                return new Chequeo(nombre, "error", "Faltan " + string.Join(" y ", faltan) + ". Se bajan con: " + string.Join(" y ", comandos) + ".");
             }
             return new Chequeo(nombre, "ok", _modeloChat + " y " + _modeloEmbeddings + " instalados.");
         }
