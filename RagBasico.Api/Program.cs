@@ -28,6 +28,28 @@ builder.Services.AddExceptionHandler<ManejadorDeErrores>();
 
 var app = builder.Build();
 
+// Antes de escuchar, controla lo que la API no puede no tener: la base y los dos modelos.
+// Qdrant no, porque la demo sigue sin él. Con Rag:ChequearAlArrancar en false, arranca igual.
+if (app.Configuration.GetValue("Rag:ChequearAlArrancar", true))
+{
+    List<Chequeo> problemas;
+    using (IServiceScope alcance = app.Services.CreateScope())
+    {
+        problemas = await alcance.ServiceProvider.GetRequiredService<Salud>().RevisarArranqueAsync(CancellationToken.None);
+    }
+    if (problemas.Count > 0)
+    {
+        foreach (Chequeo problema in problemas)
+        {
+            app.Logger.LogCritical("La API no arranca. {Nombre}: {Detalle}", problema.Nombre, problema.Detalle);
+        }
+        // Liberar la aplicación vacía el log antes de salir; si no, los mensajes se pueden perder.
+        await app.DisposeAsync();
+        Environment.ExitCode = 1;
+        return;
+    }
+}
+
 // Al arrancar, la API dice qué carpeta de PDF va a usar, o avisa que no existe.
 string carpeta = app.Configuration["Rag:CarpetaDocumentos"] ?? "";
 if (carpeta.Length > 0 && Directory.Exists(carpeta))
@@ -82,23 +104,36 @@ app.MapPost("/indexar", async (Indexador indexador, CancellationToken ct) =>
 app.MapPost("/vectores", async (Vectorizador vectorizador, CancellationToken ct) =>
     await vectorizador.CalcularPendientesAsync(ct));
 
-// Un modo mal escrito da un error 400 que lo dice, en lugar de buscar con otro modo sin avisar.
+// Una pregunta que no sirve o un modo mal escrito dan un error 400 que dice el motivo,
+// en lugar de buscar con algo que no sirve o con otro modo sin avisar.
+int largoMaximo = app.Configuration.GetValue("Rag:LargoMaximoPregunta", 500);
+
 app.MapGet("/buscar", async (string q, string? modo, Buscador buscador, CancellationToken ct) =>
 {
+    string motivo = Validador.RevisarPregunta(q, largoMaximo);
+    if (motivo != "")
+    {
+        return Results.Problem(title: "La pregunta no es válida", detail: motivo, statusCode: 400);
+    }
     string? elegido = Buscador.ElegirModo(modo);
     if (elegido == null)
     {
-        return Results.BadRequest(new { error = "Modo desconocido: '" + modo + "'. Los modos son: " + string.Join(", ", Buscador.Modos) + "." });
+        return Results.Problem(title: "Modo desconocido", detail: "No existe el modo '" + modo + "'. Los modos son: " + string.Join(", ", Buscador.Modos) + ".", statusCode: 400);
     }
     return Results.Ok(await buscador.BuscarAsync(q, elegido, app.Configuration.GetValue("Rag:TopK", 5), ct));
 });
 
 app.MapPost("/preguntar", async (PedidoPregunta pedido, Redactor redactor, CancellationToken ct) =>
 {
+    string motivo = Validador.RevisarPregunta(pedido.Pregunta, largoMaximo);
+    if (motivo != "")
+    {
+        return Results.Problem(title: "La pregunta no es válida", detail: motivo, statusCode: 400);
+    }
     string? elegido = Buscador.ElegirModo(pedido.Modo);
     if (elegido == null)
     {
-        return Results.BadRequest(new { error = "Modo desconocido: '" + pedido.Modo + "'. Los modos son: " + string.Join(", ", Buscador.Modos) + "." });
+        return Results.Problem(title: "Modo desconocido", detail: "No existe el modo '" + pedido.Modo + "'. Los modos son: " + string.Join(", ", Buscador.Modos) + ".", statusCode: 400);
     }
     return Results.Ok(await redactor.ResponderAsync(pedido.Pregunta, elegido, ct));
 });

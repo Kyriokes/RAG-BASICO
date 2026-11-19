@@ -44,6 +44,23 @@ public sealed class Salud
         return new InformeSalud(estado, chequeos);
     }
 
+    /// <summary>Los chequeos sin los que la API no puede arrancar: la base y los dos modelos. Qdrant no, porque la demo sigue sin él. Devuelve los que dieron error; vacía si se puede arrancar.</summary>
+    public async Task<List<Chequeo>> RevisarArranqueAsync(CancellationToken ct)
+    {
+        List<Chequeo> errores = new List<Chequeo>();
+        Chequeo sql = await RevisarSqlAsync(ct);
+        if (sql.Estado == "error")
+        {
+            errores.Add(sql);
+        }
+        Chequeo modelos = await RevisarModelosAsync(ct);
+        if (modelos.Estado == "error")
+        {
+            errores.Add(modelos);
+        }
+        return errores;
+    }
+
     /// <summary>SQL Server: se conecta a la base y cuenta los documentos, los fragmentos y los que tienen vector.</summary>
     private async Task<Chequeo> RevisarSqlAsync(CancellationToken ct)
     {
@@ -76,7 +93,7 @@ public sealed class Salud
             {
                 throw;
             }
-            return new Chequeo(nombre, "error", "No se pudo leer la base: " + ex.Message);
+            return new Chequeo(nombre, "error", "No se pudo leer la base: " + ex.Message + " ¿Está andando el servicio de SQL Server? ¿Se creó la base con scripts\\crear-base.ps1?");
         }
     }
 

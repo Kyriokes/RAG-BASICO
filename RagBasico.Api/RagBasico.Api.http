@@ -54,6 +54,21 @@ Content-Type: application/json
 
 { "pregunta": "¿Cuál es el horario de atención los feriados?" }
 
+### Pregunta vacía: tiene que dar un error 400 que lo diga, en el formato ProblemDetails
+POST {{host}}/preguntar
+Content-Type: application/json
+
+{ "pregunta": "   " }
+
+### Pregunta de más de 500 caracteres (Rag:LargoMaximoPregunta): error 400 con el largo y el máximo
+POST {{host}}/preguntar
+Content-Type: application/json
+
+{ "pregunta": "Quisiera saber qué requisitos hay que cumplir para pedir el reintegro de gastos, qué requisitos hay que cumplir para pedir el reintegro de gastos, qué requisitos hay que cumplir para pedir el reintegro de gastos, qué requisitos hay que cumplir para pedir el reintegro de gastos, qué requisitos hay que cumplir para pedir el reintegro de gastos, qué requisitos hay que cumplir para pedir el reintegro de gastos, qué requisitos hay que cumplir para pedir el reintegro de gastos, qué requisitos hay que cumplir para pedir el reintegro de gastos," }
+
+### Pregunta sin letras ni números: error 400
+GET {{host}}/buscar?q=???
+
 ### Intento de engaño: no tiene que contar el chiste
 POST {{host}}/preguntar
 Content-Type: application/json
