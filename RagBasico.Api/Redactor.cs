@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Text;
+using Dapper;
+using Microsoft.Data.SqlClient;
 
 namespace RagBasico.Api;
 
@@ -20,43 +22,56 @@ public sealed class Redactor
 
     private readonly Buscador _buscador;
     private readonly Ollama _ollama;
+    private readonly ILogger<Redactor> _log;
+    private readonly string _conexion;
     private readonly int _topK;
 
-    /// <summary>Recibe el buscador y el cliente de Ollama, y lee de la configuración cuántos fragmentos pasarle al modelo.</summary>
-    public Redactor(Buscador buscador, Ollama ollama, IConfiguration config)
+    /// <summary>Recibe el buscador, el cliente de Ollama y el log, y lee de la configuración la conexión y cuántos fragmentos pasarle al modelo.</summary>
+    public Redactor(Buscador buscador, Ollama ollama, ILogger<Redactor> log, IConfiguration config)
     {
         _buscador = buscador;
         _ollama = ollama;
+        _log = log;
+        _conexion = config.GetConnectionString("Rag") ?? throw new InvalidOperationException("Falta ConnectionStrings:Rag en la configuración.");
         _topK = config.GetValue("Rag:TopK", 5);
     }
 
-    /// <summary>Busca los fragmentos de la pregunta y le pide la respuesta a Qwen. Si no encuentra fragmentos, no llama al modelo.</summary>
+    /// <summary>Busca los fragmentos de la pregunta y le pide la respuesta a Qwen. Si no encuentra fragmentos, no llama al modelo. Registra la consulta.</summary>
     public async Task<RespuestaRag> ResponderAsync(string pregunta, CancellationToken ct)
     {
+        const string modo = "palabras";
         Stopwatch reloj = Stopwatch.StartNew();
         List<Fragmento> fragmentos = await _buscador.PorPalabrasAsync(pregunta, _topK, ct);
         int msBusqueda = (int)reloj.ElapsedMilliseconds;
+
+        RespuestaRag resultado;
         if (fragmentos.Count == 0)
         {
-            return new RespuestaRag(SinRespuesta, new List<Fuente>(), msBusqueda, 0, 0, 0, 0);
+            resultado = new RespuestaRag(SinRespuesta, new List<Fuente>(), msBusqueda, 0, 0, 0, 0);
+        }
+        else
+        {
+            reloj.Restart();
+            RespuestaModelo respuesta = await _ollama.ChatAsync(Reglas, ArmarMensaje(pregunta, fragmentos), ct);
+            int msModelo = (int)reloj.ElapsedMilliseconds;
+
+            // Si el modelo dijo que no encontró, se devuelve la frase exacta y sin fuentes:
+            // mostrar cinco documentos debajo de "no encontré" confunde.
+            List<Fuente> fuentes = new List<Fuente>();
+            string texto = SinRespuesta;
+            if (!EsSinRespuesta(respuesta.Texto))
+            {
+                texto = respuesta.Texto;
+                for (int i = 0; i < fragmentos.Count; i++)
+                {
+                    fuentes.Add(new Fuente(i + 1, fragmentos[i].Archivo, fragmentos[i].FragmentoId));
+                }
+            }
+            resultado = new RespuestaRag(texto, fuentes, msBusqueda, msModelo, respuesta.MsCarga, respuesta.MsLectura, respuesta.MsEscritura);
         }
 
-        reloj.Restart();
-        RespuestaModelo respuesta = await _ollama.ChatAsync(Reglas, ArmarMensaje(pregunta, fragmentos), ct);
-        int msModelo = (int)reloj.ElapsedMilliseconds;
-
-        // Si el modelo dijo que no encontró, se devuelve la frase exacta y sin fuentes:
-        // mostrar cinco documentos debajo de "no encontré" confunde.
-        if (EsSinRespuesta(respuesta.Texto))
-        {
-            return new RespuestaRag(SinRespuesta, new List<Fuente>(), msBusqueda, msModelo, respuesta.MsCarga, respuesta.MsLectura, respuesta.MsEscritura);
-        }
-        List<Fuente> fuentes = new List<Fuente>();
-        for (int i = 0; i < fragmentos.Count; i++)
-        {
-            fuentes.Add(new Fuente(i + 1, fragmentos[i].Archivo, fragmentos[i].FragmentoId));
-        }
-        return new RespuestaRag(respuesta.Texto, fuentes, msBusqueda, msModelo, respuesta.MsCarga, respuesta.MsLectura, respuesta.MsEscritura);
+        await RegistrarAsync(pregunta, modo, fragmentos, resultado);
+        return resultado;
     }
 
     /// <summary>Arma el mensaje para Qwen: los fragmentos numerados entre etiquetas y la pregunta al final, que es lo que más atiende un modelo chico.</summary>
@@ -87,5 +102,36 @@ public sealed class Redactor
     {
         string limpio = texto.Trim().Trim('"', '“', '”', '«', '»').Trim().TrimEnd('.');
         return limpio.StartsWith(SinRespuesta.TrimEnd('.'), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Guarda la consulta en rag.Consulta. Si falla, lo anota en el log y la respuesta sale igual.</summary>
+    private async Task RegistrarAsync(string pregunta, string modo, List<Fragmento> fragmentos, RespuestaRag respuesta)
+    {
+        try
+        {
+            string recortada = pregunta.Length > 2000 ? pregunta.Substring(0, 2000) : pregunta;
+            using (SqlConnection conexion = new SqlConnection(_conexion))
+            {
+                await conexion.ExecuteAsync(
+                    "INSERT INTO rag.Consulta (Pregunta, Modo, FragmentosIds, Respuesta, MsBusqueda, MsModelo, MsCarga, MsLectura, MsEscritura) " +
+                    "VALUES (@pregunta, @modo, @ids, @texto, @msBusqueda, @msModelo, @msCarga, @msLectura, @msEscritura);",
+                    new
+                    {
+                        pregunta = recortada,
+                        modo,
+                        ids = string.Join(",", fragmentos.Select(f => f.FragmentoId)),
+                        texto = respuesta.Texto,
+                        msBusqueda = respuesta.MsBusqueda,
+                        msModelo = respuesta.MsModelo,
+                        msCarga = respuesta.MsCarga,
+                        msLectura = respuesta.MsLectura,
+                        msEscritura = respuesta.MsEscritura
+                    });
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "No se pudo registrar la consulta en rag.Consulta.");
+        }
     }
 }
