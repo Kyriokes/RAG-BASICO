@@ -6,6 +6,7 @@ Crea la base de la fase y corre en orden los scripts numerados de sql\.
 Toma el servidor y la base de ConnectionStrings:Rag en RagBasico.Api\appsettings.json, salvo que se pasen
 -Servidor o -Base. Corre con sqlcmd cada sql\NN_*.sql, en orden, pasándole el nombre de la base en la variable Base.
 Los scripts se pueden correr de nuevo: cada paso controla si ya está hecho.
+Si el servidor es de esta PC, se conecta por memoria compartida (lpc:), sin el servicio SQL Server Browser.
 
 .PARAMETER Base
 Nombre de la base. Por defecto, el de la cadena de conexión (por ejemplo, RagBasico_F2).
@@ -47,14 +48,26 @@ try {
         exit 1
     }
 
+    # Una instancia de esta PC se conecta por memoria compartida (lpc:). Sin el prefijo, el sqlcmd que instala winget
+    # primero le pregunta por la instancia al servicio SQL Server Browser, y si ese servicio no está andando, lo espera
+    # hasta agotar el tiempo y falla aunque SQL Server esté andando.
+    $destino = $Servidor
+    $local = '^(localhost|\.|\(local\)|' + [regex]::Escape($env:COMPUTERNAME) + ')(\\[^,]*)?$'
+    if ($destino -notmatch '^\w+:' -and $destino -match $local) {
+        $destino = 'lpc:' + $destino
+    }
+
     $scripts = @(Get-ChildItem -LiteralPath (Join-Path $raiz 'sql') -Filter '*.sql' |
         Where-Object { $_.Name -match '^\d\d_' } | Sort-Object Name)
     foreach ($script in $scripts) {
         Write-Host "Corriendo $($script.Name) en $Base..."
         # -E: autenticación de Windows; -C: confiar en el certificado de SQL Express; -b: cortar ante un error.
-        & sqlcmd -S $Servidor -E -C -b -v "Base=$Base" -i $script.FullName
+        & sqlcmd -S $destino -E -C -b -v "Base=$Base" -i $script.FullName
         if ($LASTEXITCODE -ne 0) {
             Write-Host "ERROR: falló $($script.Name)."
+            # El error más común: el servicio de SQL Server está detenido. Por memoria compartida, sqlcmd falla enseguida
+            # con "The system cannot find the file specified", sin decir que es el servicio.
+            Write-Host 'Si no pudo conectarse, revisá que esté andando el servicio de SQL Server. Como administrador: Start-Service ''MSSQL$SQLEXPRESS'''
             exit 1
         }
     }
