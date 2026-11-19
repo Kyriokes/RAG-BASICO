@@ -12,6 +12,7 @@ builder.Services.AddHttpClient<Ollama>(cliente =>
 builder.Services.AddScoped<Indexador>();
 builder.Services.AddScoped<Buscador>();
 builder.Services.AddScoped<Redactor>();
+builder.Services.AddScoped<Evaluador>();
 
 var app = builder.Build();
 
@@ -41,5 +42,8 @@ app.MapGet("/buscar", async (string q, Buscador buscador, CancellationToken ct) 
 
 app.MapPost("/preguntar", async (PedidoPregunta pedido, Redactor redactor, CancellationToken ct) =>
     await redactor.ResponderAsync(pedido.Pregunta, ct));
+
+app.MapPost("/evaluar", async (Evaluador evaluador, CancellationToken ct) =>
+    await evaluador.CorrerAsync(ct));
 
 app.Run();

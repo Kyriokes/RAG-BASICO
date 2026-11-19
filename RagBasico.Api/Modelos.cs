@@ -30,3 +30,21 @@ public sealed record RespuestaRag(
     int MsCarga,
     int MsLectura,
     int MsEscritura);
+
+/// <summary>Una pregunta del examen y los documentos que la responden. Sin documentos, es una pregunta sin respuesta.</summary>
+public sealed record PreguntaExamen(string Pregunta, List<string> Documentos);
+
+/// <summary>Cómo le fue a una pregunta del examen en un modo de búsqueda: en qué puesto apareció un documento correcto (0 si no apareció) y cuánto tardó.</summary>
+public sealed record DetallePregunta(string Pregunta, string Modo, int Puesto, int Ms);
+
+/// <summary>El resultado de un modo de búsqueda en todo el examen.</summary>
+public sealed record ResultadoModo(string Modo, int Preguntas, int PrimerLugar, int EntreLosCinco, int MsPromedio);
+
+/// <summary>Lo que devuelve POST /evaluar.</summary>
+public sealed record InformeEvaluacion(
+    List<ResultadoModo> Resultados,
+    int SinRespuestaCorrectas,
+    int SinRespuestaTotal,
+    List<DetallePregunta> Detalle,
+    List<string> Fallas,
+    List<string> Avisos);
