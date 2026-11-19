@@ -25,7 +25,7 @@ public sealed class ManejadorDeErrores : IExceptionHandler
         return true;
     }
 
-    /// <summary>Traduce un error a un problema: qué pasó, qué hacer y el código HTTP. Un servicio caído es 503, uno que tardó demasiado 504, un pedido mal armado 400, y el resto 500.</summary>
+    /// <summary>Traduce un error a un problema: qué pasó, qué hacer y el código HTTP. Un servicio caído es 503, uno que respondió con un error 502, uno que tardó demasiado 504, un pedido que no se pudo leer 400, y el resto 500.</summary>
     public static ProblemDetails Describir(Exception error)
     {
         ErrorDeServicio? deServicio = error as ErrorDeServicio;
@@ -50,10 +50,8 @@ public sealed class ManejadorDeErrores : IExceptionHandler
         {
             return Problema(malArmado.StatusCode, "El pedido no es válido", error.Message);
         }
-        if (error is ArgumentException)
-        {
-            return Problema(400, "El pedido no es válido", error.Message);
-        }
+        // Un ArgumentException no es culpa de quien pregunta: lo que manda el cliente ya lo controlan el Validador y
+        // Buscador.ElegirModo. Si aparece, es de la API, por ejemplo una configuración inválida, y es un 500.
         return Problema(500, "Error inesperado", error.Message);
     }
 

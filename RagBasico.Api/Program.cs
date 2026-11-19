@@ -25,6 +25,9 @@ builder.Services.AddScoped<Salud>();
 // Los errores salen como ProblemDetails: un JSON con título, detalle y código HTTP, en lugar de un 500 genérico.
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<ManejadorDeErrores>();
+// Un pedido que no se puede leer, como un JSON roto, lanza un error que atiende el ManejadorDeErrores con el motivo.
+// ASP.NET Core lo hace solo en Development; así es igual en cualquier entorno.
+builder.Services.Configure<RouteHandlerOptions>(opciones => opciones.ThrowOnBadRequest = true);
 
 var app = builder.Build();
 
@@ -32,10 +35,18 @@ var app = builder.Build();
 // Qdrant no, porque la demo sigue sin él. Con Rag:ChequearAlArrancar en false, arranca igual.
 if (app.Configuration.GetValue("Rag:ChequearAlArrancar", true))
 {
-    List<Chequeo> problemas;
-    using (IServiceScope alcance = app.Services.CreateScope())
+    List<Chequeo> problemas = new List<Chequeo>();
+    try
     {
-        problemas = await alcance.ServiceProvider.GetRequiredService<Salud>().RevisarArranqueAsync(CancellationToken.None);
+        using (IServiceScope alcance = app.Services.CreateScope())
+        {
+            problemas = await alcance.ServiceProvider.GetRequiredService<Salud>().RevisarArranqueAsync(CancellationToken.None);
+        }
+    }
+    catch (Exception ex)
+    {
+        // Un error al armar los servicios, como un tiempo de espera en 0 en la configuración, también frena el arranque, con su motivo.
+        problemas.Add(new Chequeo("Configuración", "error", ex.Message));
     }
     if (problemas.Count > 0)
     {
@@ -85,6 +96,8 @@ app.Lifetime.ApplicationStarted.Register(() =>
 
 // El manejador de errores va primero: atiende los errores de todo lo que viene después.
 app.UseExceptionHandler();
+// Las respuestas de error sin cuerpo, como un 404, un 405 o un 415, salen también como ProblemDetails.
+app.UseStatusCodePages();
 
 // La página de la demo: wwwroot\index.html. UseDefaultFiles hace que "/" muestre index.html,
 // y UseStaticFiles sirve los archivos de wwwroot. Por eso la información del proyecto pasa a /info.
