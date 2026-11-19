@@ -1,6 +1,6 @@
 # Responsabilidades
 
-Qué hace cada archivo, clase, función y endpoint de esta versión, y quién lo usa. Esta es la versión de `fase-4-carga`.
+Qué hace cada archivo, clase, función y endpoint de esta versión, y quién lo usa. Esta es la versión de `fase-5-vectores`.
 
 Cómo leerlo:
 
@@ -18,7 +18,7 @@ RAG-BASICO\
 ├─ .gitignore                      qué no se sube a git
 ├─ README.md                       portada: qué es y cómo correr esta fase
 ├─ RagBasico.Api\                  la API web
-│  ├─ Buscador.cs                  búsqueda por palabras
+│  ├─ Buscador.cs                  búsqueda por palabras y por vectores
 │  ├─ Chunker.cs                   corta el texto en fragmentos por párrafos
 │  ├─ Evaluador.cs                 corre el examen
 │  ├─ Indexador.cs                 pone la base al día con la carpeta de PDF
@@ -31,6 +31,7 @@ RAG-BASICO\
 │  ├─ RagBasico.Api.csproj         el proyecto y sus paquetes
 │  ├─ RagBasico.Api.http           pedidos de prueba
 │  ├─ Redactor.cs                  arma la respuesta con Qwen y la registra
+│  ├─ Vectorizador.cs              calcula el vector de cada fragmento
 │  └─ appsettings.json             configuración
 ├─ RagBasico.slnx                  la solución que abre Visual Studio
 ├─ docs\                           documentación
@@ -41,7 +42,8 @@ RAG-BASICO\
 │  │  ├─ fase-1-ollama.md          C# y HTTP contra Qwen
 │  │  ├─ fase-2-rag-minimo.md      el primer RAG
 │  │  ├─ fase-3-medicion.md        el examen y los tiempos
-│  │  └─ fase-4-carga.md           la carga incremental y el corte por párrafos
+│  │  ├─ fase-4-carga.md           la carga incremental y el corte por párrafos
+│  │  └─ fase-5-vectores.md        la búsqueda por significado
 │  ├─ responsabilidades.md         este documento
 │  └─ worktrees.md                 una carpeta por fase
 ├─ documentos.csv                  manifiesto de los PDF del examen
@@ -57,6 +59,7 @@ RAG-BASICO\
    ├─ 01_base.sql                  tablas y Full-Text
    ├─ 02_consultas.sql             registro de preguntas
    ├─ 03_huella.sql                huella de carga de cada documento
+   ├─ 04_vectores.sql              vector de cada fragmento
    └─ consultas-utiles.sql         consultas para mirar la base
 ```
 
@@ -89,20 +92,41 @@ RAG-BASICO\
 
 - **Responsabilidad:** la portada del repo: qué es, qué hace falta para correr esta fase, cómo correrla, cómo recorrer las fases y la tabla de fases.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores.
 
 ## RagBasico.Api\Buscador.cs
 
-- **Responsabilidad:** encontrar los fragmentos que mejor responden una pregunta.
+- **Responsabilidad:** encontrar los fragmentos que mejor responden una pregunta, por palabras o por significado.
+- **Contiene:** la clase `Buscador`, con la lista pública `Modos` (`palabras` y `vectores`) y la constante `ModoPorDefecto` (`palabras`).
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-5-vectores.
 
 ### Clase Buscador
 
-- **Responsabilidad:** juntar en un solo lugar las formas de buscar. En esta fase hay una: por palabras.
-- **Recibe en el constructor:** la configuración, de donde lee `ConnectionStrings:Rag`.
+- **Responsabilidad:** juntar en un solo lugar las formas de buscar: por palabras, con el Full-Text, y por vectores, con `VECTOR_DISTANCE`.
+- **Recibe en el constructor:** el cliente de `Ollama`, para calcular el vector de la pregunta, y la configuración, de donde lee `ConnectionStrings:Rag`.
 - **La registra:** Program.cs, con `AddScoped`: un objeto nuevo por pedido HTTP.
 - **Desde:** fase-2-rag-minimo.
+- **Cambió en:** fase-5-vectores (recibe el cliente de Ollama y busca por vectores).
+
+### Buscador.ElegirModo(pedido)
+
+- **Qué hace:** controla el modo que llega en un pedido. Sin modo, devuelve el modo por defecto. Con un modo que existe, lo devuelve en minúsculas y sin espacios. Con un modo que no existe devuelve `null`, para que quien llama dé un error en lugar de buscar con otro modo sin avisar.
+- **Recibe:** el modo del pedido, que puede faltar.
+- **Devuelve:** el modo, o `null` si no existe.
+- **Efectos:** ninguno.
+- **La llaman:** los endpoints `GET /buscar` y `POST /preguntar`.
+- **Desde:** fase-5-vectores.
+- **Cambió en:** nada todavía.
+
+### Buscador.BuscarAsync(pregunta, modo, topK, ct)
+
+- **Qué hace:** busca con el modo pedido: llama a Buscador.PorPalabrasAsync o a Buscador.PorVectoresAsync. Con un modo que no existe lanza un `ArgumentException`, aunque los endpoints ya lo controlaron antes.
+- **Recibe:** la pregunta, el modo, cuántos fragmentos devolver y el token de cancelación.
+- **Devuelve:** la lista de `Fragmento`, del más relevante al menos relevante.
+- **Efectos:** los de la búsqueda que usa.
+- **La llaman:** el endpoint `GET /buscar`, Redactor.ResponderAsync y Evaluador.CorrerAsync.
+- **Desde:** fase-5-vectores.
 - **Cambió en:** nada todavía.
 
 ### Buscador.PorPalabrasAsync(pregunta, topK, ct)
@@ -111,8 +135,18 @@ RAG-BASICO\
 - **Recibe:** la pregunta, cuántos fragmentos devolver y el token de cancelación.
 - **Devuelve:** una lista de `Fragmento` (número, archivo y texto), del más relevante al menos relevante. Vacía si la pregunta está vacía o si ninguna palabra coincide.
 - **Efectos:** lee `rag.Fragmento` y `rag.Documento`. No escribe nada.
-- **La llaman:** el endpoint `GET /buscar` y Redactor.ResponderAsync.
+- **La llaman:** Buscador.BuscarAsync.
 - **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+### Buscador.PorVectoresAsync(pregunta, topK, ct)
+
+- **Qué hace:** busca los fragmentos más parecidos en significado a la pregunta. Le pide a Ollama el vector de la pregunta, y SQL Server ordena todos los fragmentos que tienen vector por `VECTOR_DISTANCE('cosine', ...)`: 0 es el mismo sentido y 2 el opuesto. Es una búsqueda exacta: recorre todos los vectores, así que tarda más cuantos más fragmentos haya. A diferencia de la búsqueda por palabras, casi nunca vuelve vacía: siempre hay un fragmento más cercano que otro.
+- **Recibe:** la pregunta, cuántos fragmentos devolver y el token de cancelación.
+- **Devuelve:** la lista de `Fragmento`, del más cercano al más lejano. Vacía si la pregunta está vacía o si ningún fragmento tiene vector.
+- **Efectos:** un pedido a Ollama; lee `rag.Fragmento` y `rag.Documento`. No escribe nada.
+- **La llaman:** Buscador.BuscarAsync.
+- **Desde:** fase-5-vectores.
 - **Cambió en:** nada todavía.
 
 ## RagBasico.Api\Chunker.cs
@@ -178,35 +212,38 @@ RAG-BASICO\
 
 - **Responsabilidad:** correr el examen y medir qué tan bien busca el sistema, con números y no con "a mí me anduvo".
 - **Desde:** fase-3-medicion.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-5-vectores.
 
 ### Clase Evaluador
 
-- **Responsabilidad:** leer el examen, pasar cada pregunta por el buscador y las preguntas sin respuesta por el redactor, y resumir los resultados.
+- **Responsabilidad:** leer el examen, pasar cada pregunta por el buscador y las preguntas sin respuesta por el redactor, en cada modo de búsqueda, y resumir los resultados.
 - **Recibe en el constructor:** el `Buscador`, el `Redactor`, la configuración (de donde lee `ConnectionStrings:Rag` y `Rag:ArchivoExamen`) y el entorno, para resolver la ruta del examen contra la carpeta del proyecto.
 - **La registra:** Program.cs, con `AddScoped`.
 - **Desde:** fase-3-medicion.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-5-vectores (corre todos los modos de `Buscador.Modos`).
 
 ### Evaluador.CorrerAsync(ct)
 
-- **Qué hace:** corre el examen completo. Avisa si el examen nombra un documento que no está cargado y espera hasta un minuto a que el Full-Text termine de indexar. Pasa cada pregunta con respuesta por el buscador y anota en qué puesto apareció un documento correcto. Pasa cada pregunta sin respuesta por el redactor y cuenta cuántas veces dijo la frase fija.
+- **Qué hace:** corre el examen completo en cada modo de `Buscador.Modos`.
+  1. Avisa si el examen nombra un documento que no está cargado, espera hasta un minuto a que el Full-Text termine de indexar y avisa si hay fragmentos sin vector.
+  2. En cada modo, pasa cada pregunta con respuesta por el buscador y anota en qué puesto apareció un documento correcto.
+  3. En cada modo, pasa cada pregunta sin respuesta por el redactor y cuenta cuántas veces dijo la frase fija. Se mide por modo porque por vectores la búsqueda casi nunca vuelve vacía, y el "no sé" lo decide Qwen.
 - **Recibe:** el token de cancelación.
-- **Devuelve:** un `InformeEvaluacion`: la tabla por modo, las preguntas sin respuesta bien contestadas, el detalle por pregunta, la lista de fallas y los avisos.
-- **Efectos:** lee SQL Server; las preguntas sin respuesta llaman a Ollama y quedan registradas en `rag.Consulta`.
+- **Devuelve:** un `InformeEvaluacion`: una fila por modo, el detalle por pregunta, la lista de fallas y los avisos.
+- **Efectos:** lee SQL Server y llama a Ollama: el vector de cada pregunta en el modo `vectores`, y Qwen para las preguntas sin respuesta, que quedan registradas en `rag.Consulta`.
 - **La llaman:** el endpoint `POST /evaluar`.
 - **Desde:** fase-3-medicion.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-5-vectores (todos los modos, y las preguntas sin respuesta en cada uno).
 
 ### Evaluador.Puntuar(modo, detalle)
 
-- **Qué hace:** resume un modo: cuántas preguntas tuvieron un documento correcto en el primer lugar, cuántas entre los cinco primeros, y el tiempo promedio.
+- **Qué hace:** resume un modo: cuántas preguntas tuvieron un documento correcto en el primer lugar, cuántas entre los cinco primeros, y el tiempo promedio. Las preguntas sin respuesta quedan en 0: las completa Evaluador.CorrerAsync con `with`, que copia el record cambiando solo esos dos campos.
 - **Recibe:** el nombre del modo y el detalle de cada pregunta, con su puesto (0 si no apareció).
 - **Devuelve:** un `ResultadoModo`.
 - **Efectos:** ninguno.
 - **La llaman:** Evaluador.CorrerAsync.
 - **Desde:** fase-3-medicion.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-5-vectores (devuelve también las preguntas sin respuesta, en 0).
 
 ### Evaluador.LeerExamen(ruta)
 
@@ -238,6 +275,16 @@ RAG-BASICO\
 - **Desde:** fase-3-medicion.
 - **Cambió en:** nada todavía.
 
+### Evaluador.ContarSinVectorAsync(ct)
+
+- **Qué hace:** cuenta los fragmentos que todavía no tienen vector, para avisar antes de medir: con fragmentos sin vector, la búsqueda por vectores sale baja.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** la cantidad.
+- **Efectos:** lee `rag.Fragmento`.
+- **La llaman:** Evaluador.CorrerAsync.
+- **Desde:** fase-5-vectores.
+- **Cambió en:** nada todavía.
+
 ### Evaluador.EsperarFullTextAsync(ct)
 
 - **Qué hace:** espera hasta un minuto, preguntando cada 2 segundos, a que el Full-Text no tenga cambios pendientes. Medir justo después de cargar daría números bajos.
@@ -253,7 +300,7 @@ RAG-BASICO\
 - **Responsabilidad:** mantener la base igual a la carpeta de PDF: cargar los nuevos y los cambiados, no tocar los que siguen igual y borrar los que ya no están.
 - **Contiene:** la clase `Indexador` y su constante privada `PalabrasPorPaginaMinimas` (40): el promedio de palabras por página por debajo del cual un PDF se toma como escaneado.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-4-carga.
+- **Cambió en:** fase-4-carga, fase-5-vectores.
 
 ### Clase Indexador
 
@@ -367,19 +414,20 @@ RAG-BASICO\
 - **Recibe:** el tiempo.
 - **Devuelve:** el texto, por ejemplo `00:03:27`.
 - **Efectos:** ninguno.
-- **La llaman:** Indexador.IndexarCarpetaAsync.
+- **La llaman:** Indexador.IndexarCarpetaAsync y Vectorizador.CalcularPendientesAsync.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-5-vectores (pasa a ser pública, para que la use el Vectorizador).
 
 ## RagBasico.Api\Modelos.cs
 
 - **Responsabilidad:** los records que viajan entre las piezas: lo que llega en un pedido y lo que devuelve cada servicio. Un record es una clase chica de solo datos, que se compara por su contenido.
 - **Desde:** fase-1-ollama.
-- **Cambió en:** fase-2-rag-minimo, fase-3-medicion, fase-4-carga.
+- **Cambió en:** fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores.
 
 | Record | Campo | Tipo | Para qué |
 |---|---|---|---|
 | `PedidoPregunta` | `Pregunta` | `string` | La pregunta que llega en el cuerpo de `POST /preguntar` |
+| `PedidoPregunta` | `Modo` | `string?` | El modo de búsqueda, `palabras` o `vectores`. Si falta, `palabras` |
 | `RespuestaModelo` | `Texto` | `string` | Lo que escribió el modelo |
 | `RespuestaModelo` | `MsCarga`, `MsLectura`, `MsEscritura` | `int` | Lo que tardó Ollama en cargar el modelo (0 si ya estaba), en leer el pedido y en escribir la respuesta |
 | `RespuestaModelo` | `TokensPregunta`, `TokensRespuesta` | `int` | Cuántos tokens leyó y cuántos escribió |
@@ -398,6 +446,11 @@ RAG-BASICO\
 | `DocumentoCargado` | `Huella` | `byte[]?` | La huella con que se cargó; `null` si se cargó antes de `sql\03_huella.sql` |
 | `PlanDeCarga` | `Nuevos`, `Cambiados`, `SinCambios` | `List<ArchivoEnCarpeta>` | Los PDF que hay que cargar porque no estaban o porque cambiaron, y los que quedan igual |
 | `PlanDeCarga` | `Borrar` | `List<DocumentoCargado>` | Los documentos de la base que ya no están en la carpeta. Vacía si la carpeta no tiene ningún PDF |
+| `InformeVectores` | `Calculados`, `Fallados` | `int` | Cuántos vectores se calcularon y guardaron, y cuántos fragmentos fallaron |
+| `InformeVectores` | `Pendientes` | `int` | Cuántos fragmentos quedan sin vector al terminar |
+| `InformeVectores` | `FragmentosPorSegundo` | `double` | La velocidad, que es el dato para dimensionar el servidor |
+| `InformeVectores` | `Tiempo` | `string` | Lo que tardó, como horas:minutos:segundos |
+| `InformeVectores` | `Detalle` | `List<string>` | Una línea por fragmento que falló, o una sola línea `SIN CAMBIOS` |
 | `Fuente` | `Numero` | `int` | El número con que la cita el modelo: `[1]`, `[2]`... |
 | `Fuente` | `Archivo`, `FragmentoId` | `string`, `int` | El PDF y el fragmento exacto |
 | `RespuestaRag` | `Texto` | `string` | La respuesta, o la frase de "no encontré" |
@@ -412,25 +465,25 @@ RAG-BASICO\
 | `ResultadoModo` | `Modo` | `string` | El modo de búsqueda |
 | `ResultadoModo` | `Preguntas`, `PrimerLugar`, `EntreLosCinco` | `int` | Cuántas preguntas, cuántas en el primer lugar y cuántas entre los cinco primeros |
 | `ResultadoModo` | `MsPromedio` | `int` | El tiempo promedio de búsqueda |
-| `InformeEvaluacion` | `Resultados` | `List<ResultadoModo>` | La tabla por modo |
-| `InformeEvaluacion` | `SinRespuestaCorrectas`, `SinRespuestaTotal` | `int` | De las preguntas sin respuesta, cuántas recibieron la frase fija |
+| `ResultadoModo` | `SinRespuestaCorrectas`, `SinRespuestaTotal` | `int` | De las preguntas sin respuesta, cuántas recibieron la frase fija con este modo |
+| `InformeEvaluacion` | `Resultados` | `List<ResultadoModo>` | La tabla, con una fila por modo |
 | `InformeEvaluacion` | `Detalle` | `List<DetallePregunta>` | El puesto de cada pregunta en cada modo |
-| `InformeEvaluacion` | `Fallas`, `Avisos` | `List<string>` | Las preguntas que fallaron, y los avisos (examen vacío, documentos no cargados, Full-Text pendiente) |
+| `InformeEvaluacion` | `Fallas`, `Avisos` | `List<string>` | Las preguntas que fallaron, y los avisos (examen vacío, documentos no cargados, Full-Text pendiente, fragmentos sin vector) |
 
 ## RagBasico.Api\Ollama.cs
 
 - **Responsabilidad:** hablar con Ollama por HTTP. Manda el mismo JSON que se mandaría con Postman y devuelve lo que contesta el modelo.
-- **Contiene:** la clase `Ollama` y dos records privados para leer la respuesta de `/api/chat`: `RespuestaChat` (el mensaje y los tiempos) y `MensajeChat` (el texto que escribió el modelo).
+- **Contiene:** la clase `Ollama`, con la constante pública `Dimension` (1024, el tamaño de cada vector), y tres records privados para leer las respuestas: `RespuestaChat` (el mensaje y los tiempos de `/api/chat`), `MensajeChat` (el texto que escribió el modelo) y `RespuestaEmbed` (los vectores de `/api/embed`).
 - **Desde:** fase-1-ollama.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-5-vectores.
 
 ### Clase Ollama
 
 - **Responsabilidad:** ser el único lugar del código que conoce el formato de la API de Ollama.
-- **Recibe en el constructor:** el `HttpClient` que arma Program.cs, con la dirección y el tiempo de espera de la configuración, y la configuración, de donde lee `Ollama:ModeloChat` y `Ollama:MantenerCargado`.
+- **Recibe en el constructor:** el `HttpClient` que arma Program.cs, con la dirección y el tiempo de espera de la configuración, y la configuración, de donde lee `Ollama:ModeloChat`, `Ollama:ModeloEmbeddings`, `Ollama:InstruccionPregunta` y `Ollama:MantenerCargado`.
 - **La registra:** Program.cs, con `AddHttpClient<Ollama>`, que crea un cliente tipado nuevo en cada pedido.
 - **Desde:** fase-1-ollama.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-5-vectores (los embeddings).
 
 ### Ollama.ChatAsync(sistema, usuario, ct)
 
@@ -438,8 +491,28 @@ RAG-BASICO\
 - **Recibe:** el mensaje de sistema (las reglas), el mensaje del usuario y el token de cancelación del pedido.
 - **Devuelve:** un `RespuestaModelo` con el texto y los tiempos que informa Ollama: carga del modelo, lectura de la pregunta y escritura de la respuesta, en milisegundos, y la cantidad de tokens leídos y escritos.
 - **Efectos:** un `POST /api/chat` a Ollama.
-- **La llaman:** el endpoint `POST /preguntar` de Program.cs.
+- **La llaman:** Redactor.ResponderAsync.
 - **Desde:** fase-1-ollama.
+- **Cambió en:** nada todavía.
+
+### Ollama.EmbeddingsAsync(textos, ct)
+
+- **Qué hace:** calcula el vector de cada texto con el modelo de embeddings, todos en un solo pedido a `/api/embed`. Los fragmentos se mandan así, sin instrucción, como dice la ficha del modelo. Controla que vuelva un vector por texto y que cada uno tenga 1024 números; si no, lanza un error que lo dice.
+- **Recibe:** la lista de textos y el token de cancelación.
+- **Devuelve:** un vector (`float[]` de 1024 números) por texto, en el mismo orden.
+- **Efectos:** un `POST /api/embed` a Ollama.
+- **La llaman:** Ollama.EmbeddingPreguntaAsync y Vectorizador.CalcularYGuardarAsync.
+- **Desde:** fase-5-vectores.
+- **Cambió en:** nada todavía.
+
+### Ollama.EmbeddingPreguntaAsync(pregunta, ct)
+
+- **Qué hace:** calcula el vector de una pregunta. Le antepone la instrucción de `Ollama:InstruccionPregunta` con el formato de la ficha del modelo: `Instruct: `, la instrucción, un salto de línea y `Query:` pegado a la pregunta. La instrucción va en inglés, como recomienda la ficha. Como solo cambia el vector de la pregunta, probarla en castellano no obliga a recalcular los fragmentos.
+- **Recibe:** la pregunta y el token de cancelación.
+- **Devuelve:** el vector de la pregunta.
+- **Efectos:** un `POST /api/embed` a Ollama, por medio de Ollama.EmbeddingsAsync.
+- **La llaman:** Buscador.PorVectoresAsync.
+- **Desde:** fase-5-vectores.
 - **Cambió en:** nada todavía.
 
 ### Ollama.VerificarAsync(respuesta, ct)
@@ -448,7 +521,7 @@ RAG-BASICO\
 - **Recibe:** la respuesta HTTP de Ollama y el token de cancelación.
 - **Devuelve:** nada. Si la respuesta es un error, lanza `InvalidOperationException`.
 - **Efectos:** lee el cuerpo de la respuesta cuando es un error.
-- **La llaman:** Ollama.ChatAsync.
+- **La llaman:** Ollama.ChatAsync y Ollama.EmbeddingsAsync.
 - **Desde:** fase-1-ollama.
 - **Cambió en:** nada todavía.
 
@@ -494,12 +567,12 @@ RAG-BASICO\
 - **Responsabilidad:** el punto de entrada de la API: arma la aplicación, registra los servicios, declara los endpoints y la deja escuchando.
 - **Contiene:** instrucciones de nivel superior, sin clase: el compilador arma solo el método `Main`. Se lee en cinco bloques:
   - **Armado:** `WebApplication.CreateBuilder(args)` lee `appsettings.json`, las variables de entorno y los argumentos.
-  - **Servicios:** `AddHttpClient<Ollama>` registra el cliente de Ollama con `Ollama:Url` y `Ollama:SegundosDeEspera`. `AddScoped` registra el `Indexador`, el `Buscador`, el `Redactor` y el `Evaluador`: un objeto nuevo de cada uno por pedido. Cuando un endpoint o un constructor pide uno, ASP.NET Core se lo crea: eso es la inyección de dependencias.
+  - **Servicios:** `AddHttpClient<Ollama>` registra el cliente de Ollama con `Ollama:Url` y `Ollama:SegundosDeEspera`. `AddScoped` registra el `Indexador`, el `Vectorizador`, el `Buscador`, el `Redactor` y el `Evaluador`: un objeto nuevo de cada uno por pedido. Cuando un endpoint o un constructor pide uno, ASP.NET Core se lo crea: eso es la inyección de dependencias.
   - **Control al arrancar:** muestra en el log la carpeta de PDF que va a usar, o avisa que no existe y qué variable de entorno crear.
-  - **Endpoints:** cada `app.MapGet(...)` o `app.MapPost(...)` asocia una ruta con la función que la atiende.
+  - **Endpoints:** cada `app.MapGet(...)` o `app.MapPost(...)` asocia una ruta con la función que la atiende. `GET /buscar` y `POST /preguntar` controlan el modo con Buscador.ElegirModo y, si no existe, devuelven `Results.BadRequest`: un error 400 con el motivo.
   - **Arranque:** `app.Run()` deja la API escuchando en la dirección de `launchSettings.json` hasta que se la frena con Ctrl+C.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-5-vectores.
 
 ### GET /
 
@@ -517,29 +590,37 @@ RAG-BASICO\
 - **Desde:** fase-2-rag-minimo.
 - **Cambió en:** fase-4-carga (pone la base al día con la carpeta en lugar de recargar todo).
 
+### POST /vectores
+
+- **Recibe:** nada.
+- **Devuelve:** el `InformeVectores`: cuántos vectores se calcularon, cuántos fallaron, cuántos fragmentos quedan sin vector, cuántos fragmentos por segundo, el tiempo y el detalle. La segunda vez seguida dice `SIN CAMBIOS`.
+- **La atiende:** una función de `Program.cs` que llama a Vectorizador.CalcularPendientesAsync.
+- **Desde:** fase-5-vectores.
+- **Cambió en:** nada todavía.
+
 ### GET /buscar
 
-- **Recibe:** la pregunta en el parámetro `q` de la dirección, por ejemplo `/buscar?q=requisitos reintegro`.
-- **Devuelve:** la lista de fragmentos encontrados por palabras, hasta `Rag:TopK`. Si falta `q`, un error 400.
-- **La atiende:** una función de `Program.cs` que llama a Buscador.PorPalabrasAsync.
+- **Recibe:** la pregunta en el parámetro `q` de la dirección y, si se quiere, el modo en `modo`: `palabras`, que es el modo por defecto, o `vectores`. Por ejemplo: `/buscar?q=requisitos reintegro&modo=vectores`.
+- **Devuelve:** la lista de fragmentos encontrados con ese modo, hasta `Rag:TopK`. Si falta `q`, o si el modo no existe, un error 400.
+- **La atiende:** una función de `Program.cs` que controla el modo con Buscador.ElegirModo y llama a Buscador.BuscarAsync.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-5-vectores (el parámetro `modo`).
 
 ### POST /preguntar
 
-- **Recibe:** un JSON con la pregunta, `{ "pregunta": "..." }`, que ASP.NET Core convierte en un `PedidoPregunta`.
-- **Devuelve:** el `RespuestaRag`: la respuesta de Qwen con citas `[n]`, las fuentes y los tiempos. Si los documentos no alcanzan, la frase "No encontré esa información en los documentos." sin fuentes.
-- **La atiende:** una función de `Program.cs` que llama a Redactor.ResponderAsync.
+- **Recibe:** un JSON con la pregunta y, si se quiere, el modo: `{ "pregunta": "...", "modo": "vectores" }`, que ASP.NET Core convierte en un `PedidoPregunta`. Sin modo, busca por palabras.
+- **Devuelve:** el `RespuestaRag`: la respuesta de Qwen con citas `[n]`, las fuentes y los tiempos. Si los documentos no alcanzan, la frase "No encontré esa información en los documentos." sin fuentes. Si el modo no existe, un error 400 con el motivo.
+- **La atiende:** una función de `Program.cs` que controla el modo con Buscador.ElegirModo y llama a Redactor.ResponderAsync.
 - **Desde:** fase-1-ollama.
-- **Cambió en:** fase-2-rag-minimo (responde con los documentos, no con lo que sabe Qwen).
+- **Cambió en:** fase-2-rag-minimo (responde con los documentos, no con lo que sabe Qwen), fase-5-vectores (el modo).
 
 ### POST /evaluar
 
 - **Recibe:** nada. El examen sale de `Rag:ArchivoExamen`.
-- **Devuelve:** el `InformeEvaluacion`: la tabla por modo con "1er lugar" y "entre los 5", las preguntas sin respuesta bien contestadas, el detalle por pregunta, las fallas y los avisos.
+- **Devuelve:** el `InformeEvaluacion`: una fila por modo con "1er lugar", "entre los 5", ms promedio y las preguntas sin respuesta bien contestadas; el detalle por pregunta, las fallas y los avisos.
 - **La atiende:** una función de `Program.cs` que llama a Evaluador.CorrerAsync.
 - **Desde:** fase-3-medicion.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-5-vectores (compara palabras contra vectores).
 
 ## RagBasico.Api\Properties\launchSettings.json
 
@@ -547,7 +628,7 @@ RAG-BASICO\
 - **Contiene:** un solo perfil, `http`: escucha en `http://127.0.0.1:508N`, donde N es el número de la fase, con el entorno `Development`, y abre el navegador. Así dos fases pueden correr a la vez. El template traía también un perfil `https` con puertos al azar, que se sacó porque chocaría entre fases.
 - **Por qué 127.0.0.1:** es la misma dirección que usan Ollama y Qdrant, que escuchan solo en IPv4, así todo el proyecto usa una sola. La consecuencia es que la API también escucha solo en IPv4: se la llama con `http://127.0.0.1:508N`, como hacen el archivo `.http` y el navegador que abre el perfil. Con `localhost`, los clientes de .NET (PowerShell, `WebClient`, `HttpClient`) prueban primero IPv6 y tardan unos 2 segundos más en conectarse.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores.
 
 ## RagBasico.Api\RagBasico.Api.csproj
 
@@ -564,14 +645,14 @@ RAG-BASICO\
 - **Responsabilidad:** los pedidos de prueba de la fase, listos para mandar con "Send Request" desde Visual Studio, o desde VS Code con la extensión "REST Client".
 - **Contiene:** la variable `@host`, con la dirección y el puerto de la fase, y un pedido por cada endpoint de esta versión.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores.
 
 ## RagBasico.Api\Redactor.cs
 
 - **Responsabilidad:** la "G" de RAG: armar la respuesta con los fragmentos encontrados.
 - **Contiene:** la clase `Redactor`, con dos constantes: `SinRespuesta`, la única frase para "no encontré", y `Reglas`, el mensaje de sistema con las cinco reglas para Qwen (usar solo los fragmentos, citar con `[n]`, la frase exacta cuando no alcanza, e ignorar instrucciones que vengan dentro de los documentos).
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-3-medicion.
+- **Cambió en:** fase-3-medicion, fase-5-vectores.
 
 ### Clase Redactor
 
@@ -581,15 +662,15 @@ RAG-BASICO\
 - **Desde:** fase-2-rag-minimo.
 - **Cambió en:** fase-3-medicion (recibe el log y registra cada consulta).
 
-### Redactor.ResponderAsync(pregunta, ct)
+### Redactor.ResponderAsync(pregunta, modo, ct)
 
-- **Qué hace:** busca los fragmentos de la pregunta y le pide la respuesta a Qwen. Si no hay fragmentos, responde la frase fija sin llamar al modelo. Si Qwen responde la frase de "no encontré", la devuelve sin fuentes. Al final registra la consulta.
-- **Recibe:** la pregunta y el token de cancelación.
+- **Qué hace:** busca los fragmentos de la pregunta con el modo pedido y le pide la respuesta a Qwen. Si no hay fragmentos, responde la frase fija sin llamar al modelo; por vectores casi nunca pasa, así que el "no sé" lo decide Qwen. Si Qwen responde la frase de "no encontré", la devuelve sin fuentes. Al final registra la consulta, con el modo.
+- **Recibe:** la pregunta, el modo de búsqueda y el token de cancelación.
 - **Devuelve:** un `RespuestaRag`: el texto, las fuentes numeradas como las cita el modelo y los tiempos.
 - **Efectos:** lee SQL Server (por el buscador), llama a Ollama y escribe una fila en `rag.Consulta`.
 - **La llaman:** el endpoint `POST /preguntar` y Evaluador.CorrerAsync.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-3-medicion (registra la consulta).
+- **Cambió en:** fase-3-medicion (registra la consulta), fase-5-vectores (recibe el modo).
 
 ### Redactor.ArmarMensaje(pregunta, fragmentos)
 
@@ -631,11 +712,67 @@ RAG-BASICO\
 - **Desde:** fase-3-medicion.
 - **Cambió en:** nada todavía.
 
+## RagBasico.Api\Vectorizador.cs
+
+- **Responsabilidad:** calcular el vector de cada fragmento que todavía no lo tiene y guardarlo en `rag.Fragmento`.
+- **Desde:** fase-5-vectores.
+- **Cambió en:** nada todavía.
+
+### Clase Vectorizador
+
+- **Responsabilidad:** el camino de un fragmento hasta su vector: leerlo de la base, pedirle el vector a Ollama y guardarlo.
+- **Recibe en el constructor:** el cliente de `Ollama` y la configuración, de donde lee `ConnectionStrings:Rag` y `Rag:LoteVectores`.
+- **La registra:** Program.cs, con `AddScoped`.
+- **Desde:** fase-5-vectores.
+- **Cambió en:** nada todavía.
+
+### Vectorizador.CalcularPendientesAsync(ct)
+
+- **Qué hace:** recorre los fragmentos sin vector de a lotes de `Rag:LoteVectores`, en orden de número de fragmento.
+  - Cada lote empieza después del último fragmento visto, en lugar de volver a buscar desde el principio. Así no relee lo ya hecho, que con un millón de fragmentos haría crecer el costo al cuadrado, y un fragmento que falla no traba la corrida: queda en `NULL` y se vuelve a intentar en el próximo `/vectores`.
+  - Si fallan todos los fragmentos de un lote, uno por uno, corta la corrida: el problema no es de un fragmento sino de Ollama o del modelo.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** un `InformeVectores`: cuántos vectores se calcularon, cuántos fallaron, cuántos fragmentos quedan sin vector, cuántos fragmentos por segundo, el tiempo como horas:minutos:segundos y el detalle. Si no había nada que hacer, el detalle dice `SIN CAMBIOS`.
+- **Efectos:** lee `rag.Fragmento` y `rag.Documento`, llama a Ollama y escribe `rag.Fragmento.Embedding`.
+- **La llaman:** el endpoint `POST /vectores`.
+- **Desde:** fase-5-vectores.
+- **Cambió en:** nada todavía.
+
+### Vectorizador.ComoJson(vector)
+
+- **Qué hace:** escribe un vector como lo recibe SQL Server: un arreglo JSON, como `[0.5,-0.25,0.0000123]`. Usa siempre el punto decimal (`CultureInfo.InvariantCulture`): con Windows en castellano, `ToString()` escribiría `0,5` y el JSON quedaría mal. Tampoco usa notación científica (`1E-05`).
+- **Recibe:** el vector.
+- **Devuelve:** el texto JSON.
+- **Efectos:** ninguno.
+- **La llaman:** Vectorizador.CalcularYGuardarAsync y Buscador.PorVectoresAsync.
+- **Desde:** fase-5-vectores.
+- **Cambió en:** nada todavía.
+
+### Vectorizador.GuardarLoteAsync(conexion, lote, detalle, ct)
+
+- **Qué hace:** calcula y guarda los vectores de un lote en un solo pedido a Ollama. Si falla, prueba los fragmentos de a uno, así un fragmento con problemas no deja sin vector a los demás, y anota cada uno que falla. Si se canceló el pedido, corta todo; cualquier otro error, incluido un tiempo de espera de Ollama, cuenta como error del lote.
+- **Recibe:** la conexión abierta, los fragmentos del lote, la lista del detalle y el token de cancelación.
+- **Devuelve:** cuántos vectores guardó.
+- **Efectos:** los de Vectorizador.CalcularYGuardarAsync.
+- **La llaman:** Vectorizador.CalcularPendientesAsync.
+- **Desde:** fase-5-vectores.
+- **Cambió en:** nada todavía.
+
+### Vectorizador.CalcularYGuardarAsync(conexion, fragmentos, ct)
+
+- **Qué hace:** le pide a Ollama los vectores de los fragmentos en un solo pedido y los guarda en `rag.Fragmento.Embedding`, todos en una transacción. SQL Server convierte el texto JSON en un `VECTOR(1024)` con `CAST`.
+- **Recibe:** la conexión abierta, los fragmentos y el token de cancelación.
+- **Devuelve:** nada.
+- **Efectos:** un `POST /api/embed` a Ollama y un `UPDATE` por fragmento.
+- **La llaman:** Vectorizador.GuardarLoteAsync.
+- **Desde:** fase-5-vectores.
+- **Cambió en:** nada todavía.
+
 ## RagBasico.Api\appsettings.json
 
 - **Responsabilidad:** la configuración de la API. Cada clave está explicada en `docs\arquitectura.md`.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores.
 
 ## RagBasico.slnx
 
@@ -648,7 +785,7 @@ RAG-BASICO\
 
 - **Responsabilidad:** cómo se arma esta versión: las piezas, los recorridos paso a paso, las tablas, la configuración y lo que está fuera del repo.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores.
 
 ## docs\erratas.md
 
@@ -686,11 +823,17 @@ RAG-BASICO\
 - **Desde:** fase-4-carga.
 - **Cambió en:** nada todavía.
 
+## docs\fases\fase-5-vectores.md
+
+- **Responsabilidad:** qué agregó la fase 5, en qué orden leerla, cómo probarla, qué se midió y qué se decidió.
+- **Desde:** fase-5-vectores.
+- **Cambió en:** nada todavía.
+
 ## docs\responsabilidades.md
 
 - **Responsabilidad:** este documento: qué hace cada archivo, clase, función y endpoint, y quién lo usa.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores.
 
 ## docs\worktrees.md
 
@@ -818,6 +961,14 @@ RAG-BASICO\
 - **Desde:** fase-4-carga.
 - **Cambió en:** nada todavía.
 
+## sql\04_vectores.sql
+
+- **Responsabilidad:** agrega el vector de cada fragmento, para buscar por significado.
+- **Qué crea:** la columna `Embedding VECTOR(1024)` en `rag.Fragmento`, si no existe. Queda en `NULL` hasta que `POST /vectores` la calcula.
+- **Variables sqlcmd:** `Base`, el nombre de la base.
+- **Desde:** fase-5-vectores.
+- **Cambió en:** nada todavía.
+
 ## sql\consultas-utiles.sql
 
 - **Responsabilidad:** consultas para mirar la base desde SSMS:
@@ -825,9 +976,10 @@ RAG-BASICO\
   - cada documento con su huella y su cantidad de fragmentos;
   - los fragmentos de un documento, para revisar un PDF que `/indexar` marcó con `TEXTO DUDOSO`;
   - los fragmentos de menos de 30 palabras, que con el corte por párrafos casi no tendría que haber;
-  - si el Full-Text terminó de indexar, una búsqueda a mano y qué palabras busca el Full-Text a partir de una.
+  - si el Full-Text terminó de indexar, una búsqueda a mano y qué palabras busca el Full-Text a partir de una;
+  - cuántos fragmentos tienen vector, los vecinos más cercanos de un fragmento y cuánto tarda SQL Server en recorrer todos los vectores. Toman el primer fragmento con vector que exista, no el número 1, que puede no existir después de recargar.
 - **Qué crea:** nada. `scripts\crear-base.ps1` no la corre, porque su nombre no empieza con un número.
 - **Variables sqlcmd:** ninguna. Antes de usarla se elige la base de la fase en SSMS.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-4-carga.
+- **Cambió en:** fase-4-carga, fase-5-vectores.
 
