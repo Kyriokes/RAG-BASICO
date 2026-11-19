@@ -21,6 +21,7 @@ builder.Services.AddScoped<Vectorizador>();
 builder.Services.AddScoped<Buscador>();
 builder.Services.AddScoped<Redactor>();
 builder.Services.AddScoped<Evaluador>();
+builder.Services.AddScoped<Salud>();
 
 var app = builder.Build();
 
@@ -34,6 +35,28 @@ else
 {
     app.Logger.LogWarning("No existe la carpeta de PDF '{Carpeta}'. Configurá la variable de entorno Rag__CarpetaDocumentos.", carpeta);
 }
+
+// Cuando la API ya está escuchando, carga los dos modelos en Ollama en segundo plano:
+// así la primera pregunta de la demo no espera 30 segundos. Si falla, solo queda en el log.
+app.Lifetime.ApplicationStarted.Register(() =>
+{
+    _ = Task.Run(async () =>
+    {
+        using (IServiceScope alcance = app.Services.CreateScope())
+        {
+            Ollama ollama = alcance.ServiceProvider.GetRequiredService<Ollama>();
+            try
+            {
+                await ollama.CalentarAsync(CancellationToken.None);
+                app.Logger.LogInformation("Los dos modelos quedaron cargados en Ollama.");
+            }
+            catch (Exception ex)
+            {
+                app.Logger.LogWarning("No se pudieron cargar los modelos en Ollama al arrancar: {Mensaje}", ex.Message);
+            }
+        }
+    });
+});
 
 // La página de la demo: wwwroot\index.html. UseDefaultFiles hace que "/" muestre index.html,
 // y UseStaticFiles sirve los archivos de wwwroot. Por eso la información del proyecto pasa a /info.
@@ -76,6 +99,17 @@ app.MapPost("/preguntar", async (PedidoPregunta pedido, Redactor redactor, Cance
 
 app.MapPost("/evaluar", async (Evaluador evaluador, CancellationToken ct) =>
     await evaluador.CorrerAsync(ct));
+
+// 503 si falta algo sin lo que la demo no anda. Con avisos, como Qdrant apagado, 200: la demo sigue andando.
+app.MapGet("/salud", async (Salud salud, CancellationToken ct) =>
+{
+    InformeSalud informe = await salud.RevisarAsync(ct);
+    if (informe.Estado == "error")
+    {
+        return Results.Json(informe, statusCode: 503);
+    }
+    return Results.Ok(informe);
+});
 
 app.MapGet("/qdrant/estado", async (Sincronizador sincronizador, CancellationToken ct) =>
     await sincronizador.EstadoAsync(ct));

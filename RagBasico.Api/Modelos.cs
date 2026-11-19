@@ -78,6 +78,12 @@ public sealed record EstadoQdrant(
 /// <summary>Lo que devuelve POST /qdrant/reconstruir: cuántos puntos se subieron y cuántos se borraron, el tiempo y el detalle.</summary>
 public sealed record InformeQdrant(int Subidos, int Borrados, string Tiempo, List<string> Detalle);
 
+/// <summary>Un chequeo de GET /salud: qué se revisó, cómo dio ("ok", "aviso" o "error") y el detalle.</summary>
+public sealed record Chequeo(string Nombre, string Estado, string Detalle);
+
+/// <summary>Lo que devuelve GET /salud: el estado general y cada chequeo.</summary>
+public sealed record InformeSalud(string Estado, List<Chequeo> Chequeos);
+
 /// <summary>Una pregunta del examen y los documentos que la responden. Sin documentos, es una pregunta sin respuesta.</summary>
 public sealed record PreguntaExamen(string Pregunta, List<string> Documentos);
 

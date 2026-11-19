@@ -108,6 +108,35 @@ public sealed class Ollama
         return vectores[0];
     }
 
+    /// <summary>Lista los nombres de los modelos que tiene instalados Ollama, como "qwen3.5:4b".</summary>
+    public async Task<List<string>> ListarModelosAsync(CancellationToken ct)
+    {
+        using (HttpResponseMessage respuesta = await _http.GetAsync("/api/tags", ct))
+        {
+            await VerificarAsync(respuesta, ct);
+            RespuestaModelos? cuerpo = await respuesta.Content.ReadFromJsonAsync<RespuestaModelos>(ct);
+            List<string> nombres = new List<string>();
+            if (cuerpo != null && cuerpo.Models != null)
+            {
+                foreach (ModeloInstalado modelo in cuerpo.Models)
+                {
+                    if (modelo.Name != null)
+                    {
+                        nombres.Add(modelo.Name);
+                    }
+                }
+            }
+            return nombres;
+        }
+    }
+
+    /// <summary>Carga los dos modelos en memoria con un pedido mínimo a cada uno, así la primera pregunta de la demo no espera la carga.</summary>
+    public async Task CalentarAsync(CancellationToken ct)
+    {
+        await EmbeddingsAsync(new List<string> { "hola" }, ct);
+        await ChatAsync("Respondé solo con la palabra: listo.", "Hola", ct);
+    }
+
     /// <summary>Si Ollama contesta con un error, lanza una excepción con su mensaje real (por ejemplo, "model not found").</summary>
     private static async Task VerificarAsync(HttpResponseMessage respuesta, CancellationToken ct)
     {
@@ -139,4 +168,10 @@ public sealed class Ollama
 
     /// <summary>La parte de la respuesta de /api/embed que se usa: un vector por texto, en el mismo orden.</summary>
     private sealed record RespuestaEmbed([property: JsonPropertyName("embeddings")] List<float[]>? Embeddings);
+
+    /// <summary>La respuesta de /api/tags: los modelos instalados.</summary>
+    private sealed record RespuestaModelos([property: JsonPropertyName("models")] List<ModeloInstalado>? Models);
+
+    /// <summary>Un modelo instalado en Ollama.</summary>
+    private sealed record ModeloInstalado([property: JsonPropertyName("name")] string? Name);
 }
