@@ -1,6 +1,6 @@
 # Responsabilidades
 
-Qué hace cada archivo, clase, función y endpoint de esta versión, y quién lo usa. Esta es la versión de `fase-2-rag-minimo`.
+Qué hace cada archivo, clase, función y endpoint de esta versión, y quién lo usa. Esta es la versión de `fase-3-medicion`.
 
 Cómo leerlo:
 
@@ -20,6 +20,7 @@ RAG-BASICO\
 ├─ RagBasico.Api\                  la API web
 │  ├─ Buscador.cs                  búsqueda por palabras
 │  ├─ Chunker.cs                   corta el texto en fragmentos
+│  ├─ Evaluador.cs                 corre el examen
 │  ├─ Indexador.cs                 carga los PDF en la base
 │  ├─ Modelos.cs                   records de pedidos y respuestas
 │  ├─ Ollama.cs                    cliente HTTP de Ollama
@@ -28,7 +29,7 @@ RAG-BASICO\
 │  │  └─ launchSettings.json       dirección, puerto y forma de arrancar
 │  ├─ RagBasico.Api.csproj         el proyecto y sus paquetes
 │  ├─ RagBasico.Api.http           pedidos de prueba
-│  ├─ Redactor.cs                  arma la respuesta con Qwen
+│  ├─ Redactor.cs                  arma la respuesta con Qwen y la registra
 │  └─ appsettings.json             configuración
 ├─ RagBasico.slnx                  la solución que abre Visual Studio
 ├─ docs\                           documentación
@@ -37,16 +38,22 @@ RAG-BASICO\
 │  ├─ fases\
 │  │  ├─ fase-0-base.md            el esqueleto
 │  │  ├─ fase-1-ollama.md          C# y HTTP contra Qwen
-│  │  └─ fase-2-rag-minimo.md      el primer RAG
+│  │  ├─ fase-2-rag-minimo.md      el primer RAG
+│  │  └─ fase-3-medicion.md        el examen y los tiempos
 │  ├─ responsabilidades.md         este documento
 │  └─ worktrees.md                 una carpeta por fase
+├─ documentos.csv                  manifiesto de los PDF del examen
+├─ examen.csv                      el examen
+├─ examen.ejemplo.csv              el formato del examen
 ├─ global.json                     versión del SDK de .NET
 ├─ scripts\                        herramientas del repo
 │  ├─ controlar-docs.ps1           controla la documentación
 │  ├─ crear-base.ps1               crea la base de la fase
+│  ├─ crear-manifiesto.ps1         arma o verifica el manifiesto
 │  └─ crear-worktrees.ps1          crea una carpeta por fase
 └─ sql\                            scripts de la base
    ├─ 01_base.sql                  tablas y Full-Text
+   ├─ 02_consultas.sql             registro de preguntas
    └─ consultas-utiles.sql         consultas para mirar la base
 ```
 
@@ -79,7 +86,7 @@ RAG-BASICO\
 
 - **Responsabilidad:** la portada del repo: qué es, qué hace falta para correr esta fase, cómo correrla, cómo recorrer las fases y la tabla de fases.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion.
 
 ## RagBasico.Api\Buscador.cs
 
@@ -137,6 +144,80 @@ RAG-BASICO\
 - **Efectos:** ninguno.
 - **La llaman:** Indexador.IndexarArchivoAsync, para descartar los PDF sin texto.
 - **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+## RagBasico.Api\Evaluador.cs
+
+- **Responsabilidad:** correr el examen y medir qué tan bien busca el sistema, con números y no con "a mí me anduvo".
+- **Desde:** fase-3-medicion.
+- **Cambió en:** nada todavía.
+
+### Clase Evaluador
+
+- **Responsabilidad:** leer el examen, pasar cada pregunta por el buscador y las preguntas sin respuesta por el redactor, y resumir los resultados.
+- **Recibe en el constructor:** el `Buscador`, el `Redactor`, la configuración (de donde lee `ConnectionStrings:Rag` y `Rag:ArchivoExamen`) y el entorno, para resolver la ruta del examen contra la carpeta del proyecto.
+- **La registra:** Program.cs, con `AddScoped`.
+- **Desde:** fase-3-medicion.
+- **Cambió en:** nada todavía.
+
+### Evaluador.CorrerAsync(ct)
+
+- **Qué hace:** corre el examen completo. Avisa si el examen nombra un documento que no está cargado y espera hasta un minuto a que el Full-Text termine de indexar. Pasa cada pregunta con respuesta por el buscador y anota en qué puesto apareció un documento correcto. Pasa cada pregunta sin respuesta por el redactor y cuenta cuántas veces dijo la frase fija.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** un `InformeEvaluacion`: la tabla por modo, las preguntas sin respuesta bien contestadas, el detalle por pregunta, la lista de fallas y los avisos.
+- **Efectos:** lee SQL Server; las preguntas sin respuesta llaman a Ollama y quedan registradas en `rag.Consulta`.
+- **La llaman:** el endpoint `POST /evaluar`.
+- **Desde:** fase-3-medicion.
+- **Cambió en:** nada todavía.
+
+### Evaluador.Puntuar(modo, detalle)
+
+- **Qué hace:** resume un modo: cuántas preguntas tuvieron un documento correcto en el primer lugar, cuántas entre los cinco primeros, y el tiempo promedio.
+- **Recibe:** el nombre del modo y el detalle de cada pregunta, con su puesto (0 si no apareció).
+- **Devuelve:** un `ResultadoModo`.
+- **Efectos:** ninguno.
+- **La llaman:** Evaluador.CorrerAsync.
+- **Desde:** fase-3-medicion.
+- **Cambió en:** nada todavía.
+
+### Evaluador.LeerExamen(ruta)
+
+- **Qué hace:** lee el examen, una pregunta por línea con la forma `pregunta;documento`. Acepta UTF-8 y, si el archivo no lo es, la codificación de Windows que usa Excel. Saltea el encabezado y las líneas vacías. La última columna son los documentos, separados con `|`; el resto es la pregunta, así un `;` adentro de la pregunta no la rompe. `ninguno` marca una pregunta sin respuesta.
+- **Recibe:** la ruta del examen.
+- **Devuelve:** la lista de `PreguntaExamen`.
+- **Efectos:** lee el archivo.
+- **La llaman:** Evaluador.CorrerAsync.
+- **Desde:** fase-3-medicion.
+- **Cambió en:** nada todavía.
+
+### Evaluador.PartirLinea(linea)
+
+- **Qué hace:** parte una línea de CSV por `;`, respetando los campos entre comillas y las comillas dobladas adentro (`""`).
+- **Recibe:** la línea.
+- **Devuelve:** la lista de columnas.
+- **Efectos:** ninguno.
+- **La llaman:** Evaluador.LeerExamen.
+- **Desde:** fase-3-medicion.
+- **Cambió en:** nada todavía.
+
+### Evaluador.LeerDocumentosCargadosAsync(ct)
+
+- **Qué hace:** lee los nombres de los PDF cargados, para avisar si el examen nombra uno que no está.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** el conjunto de nombres, sin distinguir mayúsculas.
+- **Efectos:** lee `rag.Documento`.
+- **La llaman:** Evaluador.CorrerAsync.
+- **Desde:** fase-3-medicion.
+- **Cambió en:** nada todavía.
+
+### Evaluador.EsperarFullTextAsync(ct)
+
+- **Qué hace:** espera hasta un minuto, preguntando cada 2 segundos, a que el Full-Text no tenga cambios pendientes. Medir justo después de cargar daría números bajos.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** cuántos cambios quedaron pendientes: 0 si terminó.
+- **Efectos:** lee `OBJECTPROPERTYEX(..., 'TableFulltextPendingChanges')`.
+- **La llaman:** Evaluador.CorrerAsync.
+- **Desde:** fase-3-medicion.
 - **Cambió en:** nada todavía.
 
 ## RagBasico.Api\Indexador.cs
@@ -197,32 +278,38 @@ RAG-BASICO\
 
 - **Responsabilidad:** los records que viajan entre las piezas: lo que llega en un pedido y lo que devuelve cada servicio. Un record es una clase chica de solo datos, que se compara por su contenido.
 - **Desde:** fase-1-ollama.
-- **Cambió en:** fase-2-rag-minimo.
+- **Cambió en:** fase-2-rag-minimo, fase-3-medicion.
 
 | Record | Campo | Tipo | Para qué |
 |---|---|---|---|
 | `PedidoPregunta` | `Pregunta` | `string` | La pregunta que llega en el cuerpo de `POST /preguntar` |
 | `RespuestaModelo` | `Texto` | `string` | Lo que escribió el modelo |
-| `RespuestaModelo` | `MsCarga` | `int` | Lo que tardó Ollama en cargar el modelo en memoria. Es 0 si ya estaba cargado |
-| `RespuestaModelo` | `MsLectura` | `int` | Lo que tardó el modelo en leer el pedido |
-| `RespuestaModelo` | `MsEscritura` | `int` | Lo que tardó en escribir la respuesta |
-| `RespuestaModelo` | `TokensPregunta` | `int` | Cuántos tokens leyó |
-| `RespuestaModelo` | `TokensRespuesta` | `int` | Cuántos tokens escribió |
+| `RespuestaModelo` | `MsCarga`, `MsLectura`, `MsEscritura` | `int` | Lo que tardó Ollama en cargar el modelo (0 si ya estaba), en leer el pedido y en escribir la respuesta |
+| `RespuestaModelo` | `TokensPregunta`, `TokensRespuesta` | `int` | Cuántos tokens leyó y cuántos escribió |
 | `Fragmento` | `FragmentoId` | `int` | El número del fragmento en `rag.Fragmento` |
 | `Fragmento` | `Archivo` | `string` | El PDF de donde salió |
 | `Fragmento` | `Texto` | `string` | El texto, que empieza con `Documento: <nombre>` |
-| `InformeIndexado` | `Documentos` | `int` | Cuántos PDF se cargaron |
-| `InformeIndexado` | `Fragmentos` | `int` | Cuántos fragmentos se guardaron |
+| `InformeIndexado` | `Documentos`, `Fragmentos` | `int` | Cuántos PDF se cargaron y cuántos fragmentos se guardaron |
 | `InformeIndexado` | `Tiempo` | `string` | Lo que tardó, como horas:minutos:segundos |
 | `InformeIndexado` | `Detalle` | `List<string>` | Una línea por archivo: "OK", "SIN TEXTO" o "ERROR" |
 | `Fuente` | `Numero` | `int` | El número con que la cita el modelo: `[1]`, `[2]`... |
-| `Fuente` | `Archivo` | `string` | El PDF de esa fuente |
-| `Fuente` | `FragmentoId` | `int` | El fragmento exacto |
+| `Fuente` | `Archivo`, `FragmentoId` | `string`, `int` | El PDF y el fragmento exacto |
 | `RespuestaRag` | `Texto` | `string` | La respuesta, o la frase de "no encontré" |
 | `RespuestaRag` | `Fuentes` | `List<Fuente>` | Las fuentes, en el orden en que se le pasaron al modelo. Vacía si no encontró |
-| `RespuestaRag` | `MsBusqueda` | `int` | Lo que tardó la búsqueda |
-| `RespuestaRag` | `MsModelo` | `int` | Lo que tardó el modelo, medido desde la API |
-| `RespuestaRag` | `MsCarga`, `MsLectura`, `MsEscritura` | `int` | Los tiempos de Ollama, como en `RespuestaModelo` |
+| `RespuestaRag` | `MsBusqueda`, `MsModelo` | `int` | Lo que tardó la búsqueda y lo que tardó el modelo, medido desde la API |
+| `RespuestaRag` | `MsCarga`, `MsLectura`, `MsEscritura` | `int` | Los tiempos de Ollama |
+| `PreguntaExamen` | `Pregunta` | `string` | La pregunta del examen |
+| `PreguntaExamen` | `Documentos` | `List<string>` | Los PDF que la responden. Vacía si es una pregunta sin respuesta |
+| `DetallePregunta` | `Pregunta`, `Modo` | `string` | La pregunta y el modo de búsqueda |
+| `DetallePregunta` | `Puesto` | `int` | En qué puesto apareció un documento correcto: 1 a 5, o 0 si no apareció |
+| `DetallePregunta` | `Ms` | `int` | Lo que tardó la búsqueda |
+| `ResultadoModo` | `Modo` | `string` | El modo de búsqueda |
+| `ResultadoModo` | `Preguntas`, `PrimerLugar`, `EntreLosCinco` | `int` | Cuántas preguntas, cuántas en el primer lugar y cuántas entre los cinco primeros |
+| `ResultadoModo` | `MsPromedio` | `int` | El tiempo promedio de búsqueda |
+| `InformeEvaluacion` | `Resultados` | `List<ResultadoModo>` | La tabla por modo |
+| `InformeEvaluacion` | `SinRespuestaCorrectas`, `SinRespuestaTotal` | `int` | De las preguntas sin respuesta, cuántas recibieron la frase fija |
+| `InformeEvaluacion` | `Detalle` | `List<DetallePregunta>` | El puesto de cada pregunta en cada modo |
+| `InformeEvaluacion` | `Fallas`, `Avisos` | `List<string>` | Las preguntas que fallaron, y los avisos (examen vacío, documentos no cargados, Full-Text pendiente) |
 
 ## RagBasico.Api\Ollama.cs
 
@@ -274,12 +361,12 @@ RAG-BASICO\
 - **Responsabilidad:** el punto de entrada de la API: arma la aplicación, registra los servicios, declara los endpoints y la deja escuchando.
 - **Contiene:** instrucciones de nivel superior, sin clase: el compilador arma solo el método `Main`. Se lee en cinco bloques:
   - **Armado:** `WebApplication.CreateBuilder(args)` lee `appsettings.json`, las variables de entorno y los argumentos.
-  - **Servicios:** `AddHttpClient<Ollama>` registra el cliente de Ollama con `Ollama:Url` y `Ollama:SegundosDeEspera`. `AddScoped` registra el `Indexador`, el `Buscador` y el `Redactor`: un objeto nuevo de cada uno por pedido. Cuando un endpoint o un constructor pide uno, ASP.NET Core se lo crea: eso es la inyección de dependencias.
+  - **Servicios:** `AddHttpClient<Ollama>` registra el cliente de Ollama con `Ollama:Url` y `Ollama:SegundosDeEspera`. `AddScoped` registra el `Indexador`, el `Buscador`, el `Redactor` y el `Evaluador`: un objeto nuevo de cada uno por pedido. Cuando un endpoint o un constructor pide uno, ASP.NET Core se lo crea: eso es la inyección de dependencias.
   - **Control al arrancar:** muestra en el log la carpeta de PDF que va a usar, o avisa que no existe y qué variable de entorno crear.
   - **Endpoints:** cada `app.MapGet(...)` o `app.MapPost(...)` asocia una ruta con la función que la atiende.
   - **Arranque:** `app.Run()` deja la API escuchando en la dirección de `launchSettings.json` hasta que se la frena con Ctrl+C.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion.
 
 ### GET /
 
@@ -313,13 +400,21 @@ RAG-BASICO\
 - **Desde:** fase-1-ollama.
 - **Cambió en:** fase-2-rag-minimo (responde con los documentos, no con lo que sabe Qwen).
 
+### POST /evaluar
+
+- **Recibe:** nada. El examen sale de `Rag:ArchivoExamen`.
+- **Devuelve:** el `InformeEvaluacion`: la tabla por modo con "1er lugar" y "entre los 5", las preguntas sin respuesta bien contestadas, el detalle por pregunta, las fallas y los avisos.
+- **La atiende:** una función de `Program.cs` que llama a Evaluador.CorrerAsync.
+- **Desde:** fase-3-medicion.
+- **Cambió en:** nada todavía.
+
 ## RagBasico.Api\Properties\launchSettings.json
 
 - **Responsabilidad:** dice cómo arranca la API cuando se la corre con `dotnet run` o con F5 en Visual Studio: la dirección, el puerto, el entorno y si abre el navegador.
 - **Contiene:** un solo perfil, `http`: escucha en `http://127.0.0.1:508N`, donde N es el número de la fase, con el entorno `Development`, y abre el navegador. Así dos fases pueden correr a la vez. El template traía también un perfil `https` con puertos al azar, que se sacó porque chocaría entre fases.
 - **Por qué 127.0.0.1:** es la misma dirección que usan Ollama y Qdrant, que escuchan solo en IPv4, así todo el proyecto usa una sola. La consecuencia es que la API también escucha solo en IPv4: se la llama con `http://127.0.0.1:508N`, como hacen el archivo `.http` y el navegador que abre el perfil. Con `localhost`, los clientes de .NET (PowerShell, `WebClient`, `HttpClient`) prueban primero IPv6 y tardan unos 2 segundos más en conectarse.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion.
 
 ## RagBasico.Api\RagBasico.Api.csproj
 
@@ -336,32 +431,32 @@ RAG-BASICO\
 - **Responsabilidad:** los pedidos de prueba de la fase, listos para mandar con "Send Request" desde Visual Studio, o desde VS Code con la extensión "REST Client".
 - **Contiene:** la variable `@host`, con la dirección y el puerto de la fase, y un pedido por cada endpoint de esta versión.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion.
 
 ## RagBasico.Api\Redactor.cs
 
 - **Responsabilidad:** la "G" de RAG: armar la respuesta con los fragmentos encontrados.
 - **Contiene:** la clase `Redactor`, con dos constantes: `SinRespuesta`, la única frase para "no encontré", y `Reglas`, el mensaje de sistema con las cinco reglas para Qwen (usar solo los fragmentos, citar con `[n]`, la frase exacta cuando no alcanza, e ignorar instrucciones que vengan dentro de los documentos).
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-3-medicion.
 
 ### Clase Redactor
 
-- **Responsabilidad:** buscar, pedirle la respuesta a Qwen y armar la respuesta con sus fuentes.
-- **Recibe en el constructor:** el `Buscador`, el cliente de `Ollama` y la configuración, de donde lee `Rag:TopK`.
+- **Responsabilidad:** buscar, pedirle la respuesta a Qwen, armar la respuesta con sus fuentes y registrar la consulta.
+- **Recibe en el constructor:** el `Buscador`, el cliente de `Ollama`, el log y la configuración, de donde lee `ConnectionStrings:Rag` y `Rag:TopK`.
 - **La registra:** Program.cs, con `AddScoped`.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-3-medicion (recibe el log y registra cada consulta).
 
 ### Redactor.ResponderAsync(pregunta, ct)
 
-- **Qué hace:** busca los fragmentos de la pregunta y le pide la respuesta a Qwen. Si no hay fragmentos, responde la frase fija sin llamar al modelo. Si Qwen responde la frase de "no encontré", la devuelve sin fuentes, porque mostrar cinco documentos debajo confunde.
+- **Qué hace:** busca los fragmentos de la pregunta y le pide la respuesta a Qwen. Si no hay fragmentos, responde la frase fija sin llamar al modelo. Si Qwen responde la frase de "no encontré", la devuelve sin fuentes. Al final registra la consulta.
 - **Recibe:** la pregunta y el token de cancelación.
-- **Devuelve:** un `RespuestaRag`: el texto, las fuentes numeradas como las cita el modelo y los tiempos de la búsqueda y del modelo.
-- **Efectos:** lee SQL Server (por el buscador) y llama a Ollama.
-- **La llaman:** el endpoint `POST /preguntar`.
+- **Devuelve:** un `RespuestaRag`: el texto, las fuentes numeradas como las cita el modelo y los tiempos.
+- **Efectos:** lee SQL Server (por el buscador), llama a Ollama y escribe una fila en `rag.Consulta`.
+- **La llaman:** el endpoint `POST /preguntar` y Evaluador.CorrerAsync.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-3-medicion (registra la consulta).
 
 ### Redactor.ArmarMensaje(pregunta, fragmentos)
 
@@ -389,15 +484,25 @@ RAG-BASICO\
 - **Recibe:** el texto que escribió el modelo.
 - **Devuelve:** `true` si es la frase de "no encontré".
 - **Efectos:** ninguno.
-- **La llaman:** Redactor.ResponderAsync.
+- **La llaman:** Redactor.ResponderAsync y Evaluador.CorrerAsync.
 - **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+### Redactor.RegistrarAsync(pregunta, modo, fragmentos, respuesta)
+
+- **Qué hace:** guarda la consulta en `rag.Consulta`: la pregunta (recortada a 2.000 caracteres), el modo, los fragmentos usados, la respuesta y los tiempos. Si falla, lo anota en el log como advertencia y la respuesta sale igual.
+- **Recibe:** la pregunta, el modo de búsqueda, los fragmentos encontrados y la respuesta armada.
+- **Devuelve:** nada.
+- **Efectos:** inserta una fila en `rag.Consulta`.
+- **La llaman:** Redactor.ResponderAsync.
+- **Desde:** fase-3-medicion.
 - **Cambió en:** nada todavía.
 
 ## RagBasico.Api\appsettings.json
 
 - **Responsabilidad:** la configuración de la API. Cada clave está explicada en `docs\arquitectura.md`.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion.
 
 ## RagBasico.slnx
 
@@ -410,7 +515,7 @@ RAG-BASICO\
 
 - **Responsabilidad:** cómo se arma esta versión: las piezas, los recorridos paso a paso, las tablas, la configuración y lo que está fuera del repo.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion.
 
 ## docs\erratas.md
 
@@ -436,16 +541,42 @@ RAG-BASICO\
 - **Desde:** fase-2-rag-minimo.
 - **Cambió en:** nada todavía.
 
+## docs\fases\fase-3-medicion.md
+
+- **Responsabilidad:** qué agregó la fase 3, en qué orden leerla, cómo probarla, qué se midió y qué se decidió.
+- **Desde:** fase-3-medicion.
+- **Cambió en:** nada todavía.
+
 ## docs\responsabilidades.md
 
 - **Responsabilidad:** este documento: qué hace cada archivo, clase, función y endpoint, y quién lo usa.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion.
 
 ## docs\worktrees.md
 
 - **Responsabilidad:** cómo abrir y correr cada fase en su propia carpeta, con git worktree, también en un clon nuevo.
 - **Desde:** fase-0-base.
+- **Cambió en:** nada todavía.
+
+## documentos.csv
+
+- **Responsabilidad:** el manifiesto del corpus del examen: una línea por PDF con su nombre, la URL de donde se bajó y su huella sha256. Con él, el examen y los documentos quedan congelados.
+- **Contiene:** el encabezado `archivo;url;sha256`. Las líneas las escribe `scripts\crear-manifiesto.ps1`; las URL se completan a mano.
+- **Desde:** fase-3-medicion.
+- **Cambió en:** nada todavía.
+
+## examen.csv
+
+- **Responsabilidad:** el examen: las preguntas, escritas antes de construir, con el documento que las responde. Lo lee Evaluador.LeerExamen.
+- **Contiene:** el encabezado `pregunta;documento`. Las preguntas se escriben siguiendo `examen.ejemplo.csv`: 15 con las mismas palabras del documento, 15 dichas con otras palabras y 10 sin respuesta.
+- **Desde:** fase-3-medicion.
+- **Cambió en:** nada todavía.
+
+## examen.ejemplo.csv
+
+- **Responsabilidad:** muestra el formato del examen con cinco casos: una pregunta común, una con tildes, una con `;` adentro (entre comillas), una con dos documentos válidos separados con `|` y una sin respuesta (`ninguno`).
+- **Desde:** fase-3-medicion.
 - **Cambió en:** nada todavía.
 
 ## global.json
@@ -501,6 +632,15 @@ RAG-BASICO\
 - **Desde:** fase-2-rag-minimo.
 - **Cambió en:** nada todavía.
 
+## scripts\crear-manifiesto.ps1
+
+- **Responsabilidad:** arma o verifica `documentos.csv`. Sin parámetros, escribe una línea por PDF con su sha256 y conserva las URL que ya estaban anotadas. Con `-Verificar`, no escribe: compara la carpeta con el manifiesto y sale con 1 si falta, sobra o cambió algún PDF.
+- **Parámetros:** `-Carpeta`, opcional, la carpeta de los PDF (por defecto, la variable de entorno `Rag__CarpetaDocumentos`); `-Verificar`, para solo comparar.
+- **Ejemplo:** `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-manifiesto.ps1 -Verificar`
+- **Requiere:** git y Windows PowerShell 5.1.
+- **Desde:** fase-3-medicion.
+- **Cambió en:** nada todavía.
+
 ## scripts\crear-worktrees.ps1
 
 - **Responsabilidad:** crea o actualiza una carpeta por cada fase, con git worktree, para leer y correr cada fase sin cambiar de branch.
@@ -521,6 +661,14 @@ RAG-BASICO\
 - **Qué crea:** la base (si no existe), el esquema `rag`, las tablas `rag.Documento` y `rag.Fragmento`, el catálogo `ftRag` sin distinguir acentos y el índice Full-Text sobre `rag.Fragmento.Texto`, en español (3082) y con actualización automática. Cada paso controla si ya está hecho, así se puede correr de nuevo.
 - **Variables sqlcmd:** `Base`, el nombre de la base. Lo pasa `scripts\crear-base.ps1`; en SSMS se define con `:setvar Base RagBasico_F2` en modo SQLCMD.
 - **Desde:** fase-2-rag-minimo.
+- **Cambió en:** nada todavía.
+
+## sql\02_consultas.sql
+
+- **Responsabilidad:** crea la tabla del registro de preguntas.
+- **Qué crea:** la tabla `rag.Consulta`, si no existe.
+- **Variables sqlcmd:** `Base`, el nombre de la base.
+- **Desde:** fase-3-medicion.
 - **Cambió en:** nada todavía.
 
 ## sql\consultas-utiles.sql

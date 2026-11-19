@@ -4,7 +4,7 @@ Un prototipo de RAG (búsqueda en documentos y respuesta redactada por un modelo
 
 Cada fase agrega una pieza y queda marcada con su branch, así el proyecto se puede recorrer de la versión más chica a la final.
 
-**Esta es la fase 2: el primer RAG, solo por palabras.** La API carga los PDF en SQL Server, busca los fragmentos con el Full-Text y Qwen responde usando solo esos fragmentos, con citas.
+**Esta es la fase 3: medir antes de mejorar.** Sobre el RAG por palabras de la fase 2, se suma un examen escrito antes de construir, un evaluador que lo corre y el registro de cada pregunta con lo que tardó cada parte.
 
 ## Requisitos de esta fase
 
@@ -31,7 +31,9 @@ cd RagBasico.Api
 dotnet run
 ```
 
-Mandá los pedidos de `RagBasico.Api\RagBasico.Api.http` en orden: `POST /indexar` carga los PDF, `GET /buscar` muestra los fragmentos que encuentra y `POST /preguntar` responde con citas.
+Mandá los pedidos de `RagBasico.Api\RagBasico.Api.http` en orden: `POST /indexar` carga los PDF, `GET /buscar` muestra los fragmentos que encuentra, `POST /preguntar` responde con citas y `POST /evaluar` corre el examen.
+
+El examen va en `examen.csv`, con el formato de `examen.ejemplo.csv`. Para congelar los PDF del examen: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-manifiesto.ps1`.
 
 Para controlar que la documentación coincida con el código, desde la raíz del repo:
 
@@ -46,8 +48,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\controlar-docs.ps1
 | 0 | `fase-0-base` | El esqueleto: configuración del repo, API vacía, documentación y scripts | 5080 | no usa | ninguno | [fase-0-base.md](docs/fases/fase-0-base.md) |
 | 1 | `fase-1-ollama` | El cliente HTTP de Ollama y `POST /preguntar`, sin documentos | 5081 | no usa | tokens por segundo: pendiente | [fase-1-ollama.md](docs/fases/fase-1-ollama.md) |
 | 2 | `fase-2-rag-minimo` | Carga de PDF en SQL Server, búsqueda por palabras y respuesta con citas | 5082 | `RagBasico_F2` | ms por respuesta: pendiente | [fase-2-rag-minimo.md](docs/fases/fase-2-rag-minimo.md) |
+| 3 | `fase-3-medicion` | El examen, el evaluador, el manifiesto de los PDF y el registro de consultas | 5083 | `RagBasico_F3` | "entre los 5" por palabras: pendiente | [fase-3-medicion.md](docs/fases/fase-3-medicion.md) |
 
-Para ver qué agregó una fase: `git diff fase-1-ollama fase-2-rag-minimo`, o la página "compare" de GitHub entre las dos branches. En un clon nuevo, primero hay que traer las branches de fase: está en [docs/worktrees.md](docs/worktrees.md).
+Para ver qué agregó una fase: `git diff fase-2-rag-minimo fase-3-medicion`, o la página "compare" de GitHub entre las dos branches. En un clon nuevo, primero hay que traer las branches de fase: está en [docs/worktrees.md](docs/worktrees.md).
 
 ## Cómo recorrer las fases
 
