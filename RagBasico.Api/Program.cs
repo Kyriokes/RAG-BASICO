@@ -28,7 +28,12 @@ else
     app.Logger.LogWarning("No existe la carpeta de PDF '{Carpeta}'. Configurá la variable de entorno Rag__CarpetaDocumentos.", carpeta);
 }
 
-app.MapGet("/", () => new
+// La página de la demo: wwwroot\index.html. UseDefaultFiles hace que "/" muestre index.html,
+// y UseStaticFiles sirve los archivos de wwwroot. Por eso la información del proyecto pasa a /info.
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
+app.MapGet("/info", () => new
 {
     proyecto = app.Configuration["Rag:Proyecto"],
     fase = app.Configuration["Rag:Fase"],
