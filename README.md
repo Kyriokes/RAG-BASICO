@@ -4,7 +4,7 @@ Un prototipo de RAG (búsqueda en documentos y respuesta redactada por un modelo
 
 Cada fase agrega una pieza y queda marcada con su branch, así el proyecto se puede recorrer de la versión más chica a la final.
 
-**Esta es la fase 7: el índice de vectores, y la versión que se presenta.** Qdrant se suma como índice de vectores al lado de SQL Server, que sigue siendo la base que manda: la API mantiene las dos iguales, y si Qdrant se apaga, la demo sigue con los vectores de SQL. `/salud` revisa todas las piezas antes de presentar, y los modelos se cargan al arrancar.
+**Esta es la fase 8: validaciones, por delante de `main`.** Sobre la versión que se presenta (la fase 7, que es `main`), la API valida la pregunta y responde cada error con claridad: un 400 con el motivo si la pregunta no sirve, un 503 que dice qué servicio no responde, y si falta la base o un modelo, no arranca y dice por qué.
 
 ## Requisitos de esta fase
 
@@ -36,7 +36,7 @@ cd RagBasico.Api
 dotnet run
 ```
 
-Antes, en otra consola, arrancá Qdrant: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\iniciar-qdrant.ps1`. La página de la demo está en `http://127.0.0.1:5087/` (con F5 en Visual Studio se abre sola; con `dotnet run`, abrila a mano), y `GET /salud` dice si anda todo. Antes de preguntar, mandá los pedidos de `RagBasico.Api\RagBasico.Api.http` en orden: `POST /indexar` pone la base al día con la carpeta (la segunda vez seguida dice `SIN CAMBIOS`), `POST /vectores` calcula los vectores y los sube a Qdrant, `GET /buscar` muestra los fragmentos que encuentra en cada modo, `POST /preguntar` responde con citas y `POST /evaluar` corre el examen.
+Antes, en otra consola, arrancá Qdrant: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\iniciar-qdrant.ps1`. La página de la demo está en `http://127.0.0.1:5088/` (con F5 en Visual Studio se abre sola; con `dotnet run`, abrila a mano), y `GET /salud` dice si anda todo. Antes de preguntar, mandá los pedidos de `RagBasico.Api\RagBasico.Api.http` en orden: `POST /indexar` pone la base al día con la carpeta (la segunda vez seguida dice `SIN CAMBIOS`), `POST /vectores` calcula los vectores y los sube a Qdrant, `GET /buscar` muestra los fragmentos que encuentra en cada modo, `POST /preguntar` responde con citas y `POST /evaluar` corre el examen.
 
 El examen va en `examen.csv`, con el formato de `examen.ejemplo.csv`. Para congelar los PDF del examen: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-manifiesto.ps1`.
 
@@ -60,8 +60,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\controlar-docs.ps1
 | 5 | `fase-5-vectores` | Vectores en SQL Server, búsqueda por significado con `VECTOR_DISTANCE` y el examen en los dos modos | 5085 | `RagBasico_F5` | "entre los 5" por vectores contra palabras: pendiente | [fase-5-vectores.md](docs/fases/fase-5-vectores.md) |
 | 6 | `fase-6-hibrida` | Búsqueda híbrida con RRF, las dos búsquedas en paralelo y la página de la demo | 5086 | `RagBasico_F6` | "entre los 5" de los tres modos: pendiente | [fase-6-hibrida.md](docs/fases/fase-6-hibrida.md) |
 | 7 | `fase-7-qdrant` | Qdrant como índice de vectores, sincronizado con SQL y con respaldo si se apaga; `/salud` y los modelos cargados al arrancar. Acá queda `main` | 5087 | `RagBasico_F7` | "entre los 5" de `vectores-qdrant` contra `vectores`: pendiente | [fase-7-qdrant.md](docs/fases/fase-7-qdrant.md) |
+| 8 | `fase-8-validaciones` | Validación de la pregunta, errores claros en formato ProblemDetails y chequeos al arrancar. Por delante de `main` | 5088 | `RagBasico_F8` | ninguno nuevo | [fase-8-validaciones.md](docs/fases/fase-8-validaciones.md) |
 
-Para ver qué agregó una fase: `git diff fase-6-hibrida fase-7-qdrant`, o la página "compare" de GitHub entre las dos branches. En un clon nuevo, primero hay que traer las branches de fase: está en [docs/worktrees.md](docs/worktrees.md).
+Para ver qué agregó una fase: `git diff fase-7-qdrant fase-8-validaciones`, o la página "compare" de GitHub entre las dos branches. En un clon nuevo, primero hay que traer las branches de fase: está en [docs/worktrees.md](docs/worktrees.md).
 
 ## Cómo recorrer las fases
 

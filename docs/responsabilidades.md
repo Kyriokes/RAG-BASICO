@@ -1,6 +1,6 @@
 # Responsabilidades
 
-Qué hace cada archivo, clase, función y endpoint de esta versión, y quién lo usa. Esta es la versión de `fase-7-qdrant`.
+Qué hace cada archivo, clase, función y endpoint de esta versión, y quién lo usa. Esta es la versión de `fase-8-validaciones`.
 
 Cómo leerlo:
 
@@ -20,9 +20,12 @@ RAG-BASICO\
 ├─ RagBasico.Api\                  la API web
 │  ├─ Buscador.cs                  búsqueda por palabras, por vectores e híbrida
 │  ├─ Chunker.cs                   corta el texto en fragmentos por párrafos
+│  ├─ DetectorDeCaidas.cs          dice qué servicio no responde
+│  ├─ ErrorDeServicio.cs           el error de Ollama o de Qdrant
 │  ├─ Errores.cs                   cuándo un error es un servicio caído
 │  ├─ Evaluador.cs                 corre el examen
 │  ├─ Indexador.cs                 pone la base al día con la carpeta de PDF
+│  ├─ ManejadorDeErrores.cs        convierte los errores en respuestas claras
 │  ├─ Modelos.cs                   records de pedidos y respuestas
 │  ├─ Ollama.cs                    cliente HTTP de Ollama
 │  ├─ Planificador.cs              decide qué PDF cargar, dejar o borrar
@@ -36,6 +39,7 @@ RAG-BASICO\
 │  ├─ Rrf.cs                       mezcla dos listas de resultados por puesto
 │  ├─ Salud.cs                     revisa que anden todas las piezas
 │  ├─ Sincronizador.cs             mantiene Qdrant igual a SQL Server
+│  ├─ Validador.cs                 controla la pregunta
 │  ├─ Vectorizador.cs              calcula el vector de cada fragmento
 │  ├─ appsettings.json             configuración
 │  └─ wwwroot\
@@ -52,7 +56,8 @@ RAG-BASICO\
 │  │  ├─ fase-4-carga.md           la carga incremental y el corte por párrafos
 │  │  ├─ fase-5-vectores.md        la búsqueda por significado
 │  │  ├─ fase-6-hibrida.md         la híbrida y la página de la demo
-│  │  └─ fase-7-qdrant.md          el índice de vectores
+│  │  ├─ fase-7-qdrant.md          el índice de vectores
+│  │  └─ fase-8-validaciones.md    las validaciones y los errores claros
 │  ├─ instalacion.md               qué instalar y cómo comprobar que anda
 │  ├─ responsabilidades.md         este documento
 │  └─ worktrees.md                 una carpeta por fase
@@ -103,7 +108,7 @@ RAG-BASICO\
 
 - **Responsabilidad:** la portada del repo: qué es, qué hace falta para correr esta fase, cómo correrla, cómo recorrer las fases y la tabla de fases.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant, fase-8-validaciones.
 
 ## RagBasico.Api\Buscador.cs
 
@@ -269,11 +274,50 @@ RAG-BASICO\
 - **Desde:** fase-4-carga.
 - **Cambió en:** nada todavía.
 
+## RagBasico.Api\DetectorDeCaidas.cs
+
+- **Responsabilidad:** decir qué servicio se cayó. Sin esto, si Ollama o Qdrant no responden, el error es un `HttpRequestException` genérico que no dice de cuál de los dos se trata.
+- **Desde:** fase-8-validaciones.
+- **Cambió en:** nada todavía.
+
+### Clase DetectorDeCaidas
+
+- **Responsabilidad:** un `DelegatingHandler`: una pieza que se pone delante del `HttpClient` y ve pasar cada pedido. Hay uno delante del cliente de Ollama y otro delante del de Qdrant.
+- **Recibe en el constructor:** el nombre del servicio que vigila: `Ollama` o `Qdrant`.
+- **La registra:** Program.cs, con `AddHttpMessageHandler` en cada `AddHttpClient`.
+- **Desde:** fase-8-validaciones.
+- **Cambió en:** nada todavía.
+
+### DetectorDeCaidas.SendAsync(pedido, ct)
+
+- **Qué hace:** manda el pedido al servicio. Si no se puede conectar, cambia el `HttpRequestException` por un `ErrorDeServicio` con código 503, el nombre del servicio y la dirección que no respondió, por ejemplo `Ollama no responde en http://127.0.0.1:11434`.
+- **Recibe:** el pedido HTTP y el token de cancelación.
+- **Devuelve:** la respuesta del servicio, sin tocarla.
+- **Efectos:** el pedido HTTP.
+- **La llaman:** el `HttpClient` de Ollama y el de Qdrant, en cada pedido.
+- **Desde:** fase-8-validaciones.
+- **Cambió en:** nada todavía.
+
+## RagBasico.Api\ErrorDeServicio.cs
+
+- **Responsabilidad:** un tipo de error propio para Ollama y Qdrant, con el nombre del servicio y el código HTTP que le corresponde, así el manejador de errores puede decir qué falló.
+- **Contiene:** la clase `ErrorDeServicio`, con las propiedades `Servicio` (`Ollama` o `Qdrant`) y `CodigoHttp` (503 si no responde, 502 si respondió con un error).
+- **Desde:** fase-8-validaciones.
+- **Cambió en:** nada todavía.
+
+### Clase ErrorDeServicio
+
+- **Responsabilidad:** heredar de `Exception` y sumarle el servicio y el código HTTP.
+- **Recibe en el constructor:** el servicio, el código HTTP, el mensaje y, si hay, el error original, que queda en `InnerException`.
+- **La registra:** nadie. La lanzan DetectorDeCaidas.SendAsync, Ollama.VerificarAsync y Qdrant.VerificarAsync. La reconocen ManejadorDeErrores.Describir, para el código HTTP, y Errores.EsCaida, para saber si el servicio no responde.
+- **Desde:** fase-8-validaciones.
+- **Cambió en:** nada todavía.
+
 ## RagBasico.Api\Errores.cs
 
 - **Responsabilidad:** las reglas sobre los errores que comparten varias piezas.
 - **Desde:** fase-7-qdrant.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-8-validaciones.
 
 ### Clase Errores
 
@@ -285,13 +329,13 @@ RAG-BASICO\
 
 ### Errores.EsCaida(error)
 
-- **Qué hace:** dice si un error muestra que un servicio, Ollama o Qdrant, no responde: no se pudo conectar (`HttpRequestException`) o no contestó a tiempo (un `TaskCanceledException` con un `TimeoutException` adentro). Un error que el servicio sí contestó, como un texto que Ollama no acepta o una colección que no existe en Qdrant, no lo es.
+- **Qué hace:** dice si un error muestra que un servicio, Ollama o Qdrant, no responde: no se pudo conectar o no contestó a tiempo (un `TaskCanceledException` con un `TimeoutException` adentro). El `DetectorDeCaidas` convierte el error de conexión en un `ErrorDeServicio` con código 503, que cuenta como caída; uno con 502, que es el servicio contestando un error, no. Un error que el servicio sí contestó, como un texto que Ollama no acepta o una colección que no existe en Qdrant, no es una caída.
 - **Recibe:** el error.
 - **Devuelve:** `true` si el servicio no responde.
 - **Efectos:** ninguno.
 - **La llaman:** Vectorizador.CalcularPendientesAsync, Vectorizador.GuardarLoteAsync y Buscador.VectoresConRespaldoAsync.
-- **Desde:** fase-7-qdrant. Hasta la versión anterior de esta fase estaba en el Vectorizador, como `Vectorizador.EsCaida`.
-- **Cambió en:** nada todavía.
+- **Desde:** fase-7-qdrant. Hasta la versión anterior de esa fase estaba en el Vectorizador, como `Vectorizador.EsCaida`.
+- **Cambió en:** fase-8-validaciones (reconoce el `ErrorDeServicio`).
 
 ## RagBasico.Api\Evaluador.cs
 
@@ -517,6 +561,55 @@ RAG-BASICO\
 - **Desde:** fase-2-rag-minimo.
 - **Cambió en:** fase-5-vectores (pasa a ser pública, para que la use el Vectorizador).
 
+## RagBasico.Api\ManejadorDeErrores.cs
+
+- **Responsabilidad:** que ningún error llegue como un 500 genérico: cada error que nadie atrapó sale como un problema con título, detalle y el código HTTP que corresponde, en el formato estándar ProblemDetails (`application/problem+json`).
+- **Desde:** fase-8-validaciones.
+- **Cambió en:** nada todavía.
+
+### Clase ManejadorDeErrores
+
+- **Responsabilidad:** implementa `IExceptionHandler`, la interfaz de ASP.NET Core para atender los errores que nadie atrapó.
+- **Recibe en el constructor:** el log.
+- **La registra:** Program.cs, con `AddExceptionHandler<ManejadorDeErrores>`; `UseExceptionHandler` la pone en el camino de cada pedido.
+- **Desde:** fase-8-validaciones.
+- **Cambió en:** nada todavía.
+
+### ManejadorDeErrores.TryHandleAsync(contexto, error, ct)
+
+- **Qué hace:** anota el error en el log, con todo su detalle, y responde el problema que arma ManejadorDeErrores.Describir.
+- **Recibe:** el contexto del pedido, el error y el token de cancelación.
+- **Devuelve:** `true`: el error quedó atendido y ASP.NET Core no hace nada más.
+- **Efectos:** escribe en el log y escribe la respuesta HTTP.
+- **La llaman:** ASP.NET Core, cuando un endpoint lanza un error que nadie atrapó.
+- **Desde:** fase-8-validaciones.
+- **Cambió en:** nada todavía.
+
+### ManejadorDeErrores.Describir(error)
+
+- **Qué hace:** traduce un error a un problema:
+  - `ErrorDeServicio`: 503 "Ollama no responde" o "Qdrant no responde", o 502 si respondió con un error.
+  - `SqlException`: 503 "SQL Server no responde o devolvió un error", con qué revisar.
+  - Tiempo de espera vencido (`TaskCanceledException` con un `TimeoutException` adentro): 504 "Un servicio tardó demasiado".
+  - `BadHttpRequestException`, el error de ASP.NET Core cuando no puede leer el pedido (un JSON roto, un parámetro que falta): su propio código, 400, con "El pedido no es válido".
+  - Cualquier otro, incluido un `ArgumentException`: 500 "Error inesperado", con su mensaje. Un `ArgumentException` no es culpa de quien pregunta: lo que manda el cliente ya lo controlan Validador.RevisarPregunta y Buscador.ElegirModo, así que si aparece es de la API, por ejemplo una configuración inválida.
+- **Recibe:** el error.
+- **Devuelve:** un `ProblemDetails` con el código, el título y el detalle.
+- **Efectos:** ninguno.
+- **La llaman:** ManejadorDeErrores.TryHandleAsync.
+- **Desde:** fase-8-validaciones.
+- **Cambió en:** nada todavía.
+
+### ManejadorDeErrores.Problema(codigo, titulo, detalle)
+
+- **Qué hace:** arma un `ProblemDetails` con los tres datos.
+- **Recibe:** el código HTTP, el título y el detalle.
+- **Devuelve:** el `ProblemDetails`.
+- **Efectos:** ninguno.
+- **La llaman:** ManejadorDeErrores.Describir.
+- **Desde:** fase-8-validaciones.
+- **Cambió en:** nada todavía.
+
 ## RagBasico.Api\Modelos.cs
 
 - **Responsabilidad:** los records que viajan entre las piezas: lo que llega en un pedido y lo que devuelve cada servicio. Un record es una clase chica de solo datos, que se compara por su contenido.
@@ -596,7 +689,7 @@ RAG-BASICO\
 - **Responsabilidad:** hablar con Ollama por HTTP. Manda el mismo JSON que se mandaría con Postman y devuelve lo que contesta el modelo.
 - **Contiene:** la clase `Ollama`, con la constante pública `Dimension` (1024, el tamaño de cada vector), y cinco records privados para leer las respuestas: `RespuestaChat` (el mensaje y los tiempos de `/api/chat`), `MensajeChat` (el texto que escribió el modelo), `RespuestaEmbed` (los vectores de `/api/embed`), `RespuestaModelos` y `ModeloInstalado` (los modelos de `/api/tags`).
 - **Desde:** fase-1-ollama.
-- **Cambió en:** fase-5-vectores, fase-7-qdrant.
+- **Cambió en:** fase-5-vectores, fase-7-qdrant, fase-8-validaciones.
 
 ### Clase Ollama
 
@@ -660,11 +753,11 @@ RAG-BASICO\
 
 - **Qué hace:** si Ollama contestó con un error, lanza una excepción con su mensaje real, por ejemplo "model not found", en lugar de un error genérico.
 - **Recibe:** la respuesta HTTP de Ollama y el token de cancelación.
-- **Devuelve:** nada. Si la respuesta es un error, lanza `InvalidOperationException`.
+- **Devuelve:** nada. Si la respuesta es un error, lanza un `ErrorDeServicio` de Ollama con código 502.
 - **Efectos:** lee el cuerpo de la respuesta cuando es un error.
 - **La llaman:** Ollama.ChatAsync, Ollama.EmbeddingsAsync y Ollama.ListarModelosAsync.
 - **Desde:** fase-1-ollama.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-8-validaciones (lanza un `ErrorDeServicio` en lugar de un `InvalidOperationException`).
 
 ### Ollama.NanosAMilisegundos(nanosegundos)
 
@@ -705,17 +798,19 @@ RAG-BASICO\
 
 ## RagBasico.Api\Program.cs
 
-- **Responsabilidad:** el punto de entrada de la API: arma la aplicación, registra los servicios, carga los modelos, sirve la página de la demo, declara los endpoints y la deja escuchando.
-- **Contiene:** instrucciones de nivel superior, sin clase: el compilador arma solo el método `Main`. Se lee en siete bloques:
+- **Responsabilidad:** el punto de entrada de la API: arma la aplicación, registra los servicios, controla que estén la base y los modelos, carga los modelos, atiende los errores, sirve la página de la demo, declara los endpoints y la deja escuchando.
+- **Contiene:** instrucciones de nivel superior, sin clase: el compilador arma solo el método `Main`. Se lee en nueve bloques:
   - **Armado:** `WebApplication.CreateBuilder(args)` lee `appsettings.json`, las variables de entorno y los argumentos.
-  - **Servicios:** `AddHttpClient<Ollama>` registra el cliente de Ollama con `Ollama:Url` y `Ollama:SegundosDeEspera`, y `AddHttpClient<Qdrant>` el de Qdrant con `Qdrant:Url` y `Qdrant:SegundosDeEspera`, que es corto: si Qdrant no responde, la híbrida sigue con SQL. `AddScoped` registra el `Sincronizador`, el `Indexador`, el `Vectorizador`, el `Buscador`, el `Redactor`, el `Evaluador` y la `Salud`: un objeto nuevo de cada uno por pedido. Cuando un endpoint o un constructor pide uno, ASP.NET Core se lo crea: eso es la inyección de dependencias.
-  - **Control al arrancar:** muestra en el log la carpeta de PDF que va a usar, o avisa que no existe y qué variable de entorno crear.
+  - **Servicios:** `AddHttpClient<Ollama>` registra el cliente de Ollama con `Ollama:Url` y `Ollama:SegundosDeEspera`, y `AddHttpClient<Qdrant>` el de Qdrant con `Qdrant:Url` y `Qdrant:SegundosDeEspera`, que es corto: si Qdrant no responde, la híbrida sigue con SQL. Delante de cada cliente, `AddHttpMessageHandler` pone un `DetectorDeCaidas`, que dice qué servicio no responde. `AddScoped` registra el `Sincronizador`, el `Indexador`, el `Vectorizador`, el `Buscador`, el `Redactor`, el `Evaluador` y la `Salud`: un objeto nuevo de cada uno por pedido. Cuando un endpoint o un constructor pide uno, ASP.NET Core se lo crea: eso es la inyección de dependencias. `AddProblemDetails` y `AddExceptionHandler<ManejadorDeErrores>` hacen que los errores salgan como ProblemDetails, y `RouteHandlerOptions.ThrowOnBadRequest` hace que un pedido que no se puede leer, como un JSON roto, llegue al manejador con su motivo en cualquier entorno, no solo en Development.
+  - **Chequeo al arrancar:** antes de escuchar, Salud.RevisarArranqueAsync controla la base y los dos modelos. Si falta algo, o si la configuración es inválida (por ejemplo, un tiempo de espera en 0), escribe en el log por qué, deja el código de salida en 1 y termina: la API no arranca. Qdrant no se controla, porque la demo sigue sin él. Con `Rag:ChequearAlArrancar` en `false`, arranca igual.
+  - **Control de la carpeta:** muestra en el log la carpeta de PDF que va a usar, o avisa que no existe y qué variable de entorno crear.
   - **Calentamiento:** cuando la API ya está escuchando (`ApplicationStarted`), carga los dos modelos en Ollama en segundo plano con Ollama.CalentarAsync, así la primera pregunta de la demo no tarda 30 segundos. `Task.Run` lo corre sin hacer esperar el arranque; si falla, queda en el log.
+  - **Errores:** `UseExceptionHandler` va primero en el camino de cada pedido: si algo lanza un error que nadie atrapó, lo atiende el `ManejadorDeErrores`. `UseStatusCodePages` le pone un cuerpo ProblemDetails a las respuestas de error que salen vacías, como un 404 (una ruta que no existe), un 405 (un método que no corresponde) o un 415 (un cuerpo que no es JSON).
   - **Página:** `UseDefaultFiles` hace que la raíz, `/`, devuelva `wwwroot\index.html`, y `UseStaticFiles` sirve los archivos de `wwwroot`. Por eso la información del proyecto está en `/info`.
-  - **Endpoints:** cada `app.MapGet(...)` o `app.MapPost(...)` asocia una ruta con la función que la atiende. `GET /buscar` y `POST /preguntar` controlan el modo con Buscador.ElegirModo y, si no existe, devuelven `Results.BadRequest`: un error 400 con el motivo.
+  - **Endpoints:** cada `app.MapGet(...)` o `app.MapPost(...)` asocia una ruta con la función que la atiende. `GET /buscar` y `POST /preguntar` controlan la pregunta con Validador.RevisarPregunta (con el máximo de `Rag:LargoMaximoPregunta`) y el modo con Buscador.ElegirModo; si algo no sirve, devuelven `Results.Problem` con código 400 y el motivo.
   - **Arranque:** `app.Run()` deja la API escuchando en la dirección de `launchSettings.json` hasta que se la frena con Ctrl+C.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-5-vectores, fase-6-hibrida, fase-7-qdrant.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-5-vectores, fase-6-hibrida, fase-7-qdrant, fase-8-validaciones.
 
 ### GET /info
 
@@ -744,18 +839,18 @@ RAG-BASICO\
 ### GET /buscar
 
 - **Recibe:** la pregunta en el parámetro `q` de la dirección y, si se quiere, el modo en `modo`: `palabras`, `vectores` (en SQL), `vectores-qdrant` o `hibrida`, que es el modo por defecto. Por ejemplo: `/buscar?q=requisitos reintegro&modo=vectores-qdrant`.
-- **Devuelve:** un `ResultadoBusqueda`: los fragmentos encontrados con ese modo, hasta `Rag:TopK`, y el aviso si la híbrida siguió sin Qdrant. Si falta `q`, o si el modo no existe, un error 400. Con `vectores-qdrant` y Qdrant apagado, un error 500.
+- **Devuelve:** un `ResultadoBusqueda`: los fragmentos encontrados con ese modo, hasta `Rag:TopK`, y el aviso si la híbrida siguió sin Qdrant. Si falta `q`, si la pregunta no sirve (vacía, más larga que `Rag:LargoMaximoPregunta`, sin letras) o si el modo no existe, un error 400 con el motivo. Con `vectores-qdrant` y Qdrant apagado, un 503 que dice que Qdrant no responde.
 - **La atiende:** una función de `Program.cs` que controla el modo con Buscador.ElegirModo y llama a Buscador.BuscarAsync.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-5-vectores (el parámetro `modo`), fase-6-hibrida (la híbrida, que pasa a ser el modo por defecto), fase-7-qdrant (el modo `vectores-qdrant`, y devuelve un objeto con el aviso en lugar de la lista sola).
+- **Cambió en:** fase-5-vectores (el parámetro `modo`), fase-6-hibrida (la híbrida, que pasa a ser el modo por defecto), fase-7-qdrant (el modo `vectores-qdrant`, y devuelve un objeto con el aviso en lugar de la lista sola), fase-8-validaciones (valida la pregunta, y los errores salen como ProblemDetails).
 
 ### POST /preguntar
 
 - **Recibe:** un JSON con la pregunta y, si se quiere, el modo: `{ "pregunta": "...", "modo": "palabras" }`, que ASP.NET Core convierte en un `PedidoPregunta`. Sin modo, usa la híbrida.
-- **Devuelve:** el `RespuestaRag`: la respuesta de Qwen con citas `[n]`, las fuentes, los tiempos y el aviso si la híbrida siguió sin Qdrant. Si los documentos no alcanzan, la frase "No encontré esa información en los documentos." sin fuentes. Si el modo no existe, un error 400 con el motivo.
+- **Devuelve:** el `RespuestaRag`: la respuesta de Qwen con citas `[n]`, las fuentes, los tiempos y el aviso si la híbrida siguió sin Qdrant. Si los documentos no alcanzan, la frase "No encontré esa información en los documentos." sin fuentes. Si la pregunta no sirve o el modo no existe, un error 400 con el motivo; si un servicio no responde, un 503 que dice cuál.
 - **La atiende:** una función de `Program.cs` que controla el modo con Buscador.ElegirModo y llama a Redactor.ResponderAsync.
 - **Desde:** fase-1-ollama.
-- **Cambió en:** fase-2-rag-minimo (responde con los documentos, no con lo que sabe Qwen), fase-5-vectores (el modo), fase-6-hibrida (la híbrida por defecto), fase-7-qdrant (el aviso).
+- **Cambió en:** fase-2-rag-minimo (responde con los documentos, no con lo que sabe Qwen), fase-5-vectores (el modo), fase-6-hibrida (la híbrida por defecto), fase-7-qdrant (el aviso), fase-8-validaciones (valida la pregunta, y los errores salen como ProblemDetails).
 
 ### POST /evaluar
 
@@ -795,14 +890,14 @@ RAG-BASICO\
 - **Contiene:** un solo perfil, `http`: escucha en `http://127.0.0.1:508N`, donde N es el número de la fase, con el entorno `Development`, y con F5 Visual Studio abre el navegador (`dotnet run` no lo abre: hay que abrir la dirección a mano). Así dos fases pueden correr a la vez. El template traía también un perfil `https` con puertos al azar, que se sacó porque chocaría entre fases.
 - **Por qué 127.0.0.1:** es la misma dirección que usan Ollama y Qdrant, que escuchan solo en IPv4, así todo el proyecto usa una sola. La consecuencia es que la API también escucha solo en IPv4: se la llama con `http://127.0.0.1:508N`, como hacen el archivo `.http` y el navegador que abre el perfil. Con `localhost`, los clientes de .NET (PowerShell, `WebClient`, `HttpClient`) prueban primero IPv6 y tardan unos 2 segundos más en conectarse.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant, fase-8-validaciones.
 
 ## RagBasico.Api\Qdrant.cs
 
 - **Responsabilidad:** hablar con Qdrant por HTTP, con JSON armado a mano, como con Ollama: sin el SDK de Qdrant, para que se vea qué se manda.
 - **Contiene:** la clase `Qdrant` y su opción privada `SinNulos`, que manda los pedidos sin los campos en `null`.
 - **Desde:** fase-7-qdrant.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-8-validaciones.
 
 ### Clase Qdrant
 
@@ -926,11 +1021,11 @@ RAG-BASICO\
 
 - **Qué hace:** si Qdrant contestó con un error, lanza una excepción con su mensaje real, por ejemplo que la colección no existe.
 - **Recibe:** la respuesta HTTP y el token de cancelación.
-- **Devuelve:** nada. Si la respuesta es un error, lanza `InvalidOperationException`.
+- **Devuelve:** nada. Si la respuesta es un error, lanza un `ErrorDeServicio` de Qdrant con código 502.
 - **Efectos:** lee el cuerpo de la respuesta cuando es un error.
 - **La llaman:** todas las funciones de Qdrant que hacen un pedido.
 - **Desde:** fase-7-qdrant.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-8-validaciones (lanza un `ErrorDeServicio` en lugar de un `InvalidOperationException`).
 
 ### Qdrant.LeerEntero(elemento, campo)
 
@@ -957,7 +1052,7 @@ RAG-BASICO\
 - **Responsabilidad:** los pedidos de prueba de la fase, listos para mandar con "Send Request" desde Visual Studio, o desde VS Code con la extensión "REST Client".
 - **Contiene:** la variable `@host`, con la dirección y el puerto de la fase, y un pedido por cada endpoint de esta versión.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant, fase-8-validaciones.
 
 ## RagBasico.Api\Redactor.cs
 
@@ -1054,15 +1149,15 @@ RAG-BASICO\
 - **Responsabilidad:** revisar que estén andando todas las piezas de la demo, para saberlo antes de presentarla y no en medio.
 - **Contiene:** la clase `Salud` y su record privado `Conteo`, con los números de la base que muestra el chequeo de SQL Server.
 - **Desde:** fase-7-qdrant.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-8-validaciones.
 
 ### Clase Salud
 
-- **Responsabilidad:** los cinco chequeos de `GET /salud`. Cada uno atrapa su propio error, así un chequeo que falla no impide ver los demás.
+- **Responsabilidad:** los cinco chequeos de `GET /salud`, y los dos que hacen falta para arrancar. Cada uno atrapa su propio error, así un chequeo que falla no impide ver los demás.
 - **Recibe en el constructor:** los clientes de `Ollama` y de `Qdrant`, y la configuración, de donde lee `ConnectionStrings:Rag`, `Ollama:ModeloChat` y `Ollama:ModeloEmbeddings`.
 - **La registra:** Program.cs, con `AddScoped`.
 - **Desde:** fase-7-qdrant.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-8-validaciones (los chequeos de arranque).
 
 ### Salud.RevisarAsync(ct)
 
@@ -1074,15 +1169,25 @@ RAG-BASICO\
 - **Desde:** fase-7-qdrant.
 - **Cambió en:** nada todavía.
 
+### Salud.RevisarArranqueAsync(ct)
+
+- **Qué hace:** corre los dos chequeos sin los que la API no puede arrancar: la base (Salud.RevisarSqlAsync) y los dos modelos (Salud.RevisarModelosAsync). Qdrant no, porque la demo sigue sin él. Un aviso, como una base sin documentos, no frena el arranque: hace falta la API andando para correr `/indexar`.
+- **Recibe:** el token de cancelación.
+- **Devuelve:** los chequeos que dieron `error`. Vacía si la API puede arrancar.
+- **Efectos:** lee SQL Server y hace un pedido a Ollama.
+- **La llaman:** Program.cs, antes de escuchar.
+- **Desde:** fase-8-validaciones.
+- **Cambió en:** nada todavía.
+
 ### Salud.RevisarSqlAsync(ct)
 
-- **Qué hace:** se conecta a la base y cuenta documentos, fragmentos y fragmentos con vector. Avisa si no hay documentos o si faltan vectores.
+- **Qué hace:** se conecta a la base y cuenta documentos, fragmentos y fragmentos con vector. Avisa si no hay documentos o si faltan vectores. Si no se puede conectar, dice qué revisar: el servicio de SQL Server y si se creó la base.
 - **Recibe:** el token de cancelación.
 - **Devuelve:** un `Chequeo`: `ok`, `aviso` o `error` si no se pudo conectar.
 - **Efectos:** lee `rag.Documento` y `rag.Fragmento`.
-- **La llaman:** Salud.RevisarAsync.
+- **La llaman:** Salud.RevisarAsync y Salud.RevisarArranqueAsync.
 - **Desde:** fase-7-qdrant.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-8-validaciones (dice qué revisar).
 
 ### Salud.RevisarFullTextAsync(ct)
 
@@ -1100,7 +1205,7 @@ RAG-BASICO\
 - **Recibe:** el token de cancelación.
 - **Devuelve:** un `Chequeo`: `ok`, o `error` si Ollama no responde o falta un modelo.
 - **Efectos:** un pedido a Ollama.
-- **La llaman:** Salud.RevisarAsync.
+- **La llaman:** Salud.RevisarAsync y Salud.RevisarArranqueAsync.
 - **Desde:** fase-7-qdrant.
 - **Cambió en:** nada todavía.
 
@@ -1139,7 +1244,7 @@ RAG-BASICO\
 - **Responsabilidad:** mantener la colección de Qdrant igual a los vectores de SQL Server. SQL es la base que manda; Qdrant es una copia de los vectores con un índice para buscar rápido.
 - **Contiene:** la clase `Sincronizador`, su constante privada `Lote` (256 vectores por pedido) y su record privado `VectorGuardado`, una fila de SQL con el vector como texto JSON.
 - **Desde:** fase-7-qdrant.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-8-validaciones.
 
 ### Clase Sincronizador
 
@@ -1175,13 +1280,13 @@ RAG-BASICO\
   1. Si la colección no existe, la crea.
   2. Si la muestra de vectores no coincide, la base se recreó: reconstruye la colección entera.
   3. Si no, borra los puntos que sobran y sube los vectores que faltan.
-  4. Si algo falla, lo anota como aviso con el tipo de error, que dice dónde falló (`HttpRequestException` es Qdrant que no responde; `SqlException`, SQL Server), y no falla: SQL ya quedó bien, y la próxima vez que se llame se pone al día.
+  4. Si algo falla, lo anota como aviso con el tipo de error, que dice dónde falló: `ErrorDeServicio` es Qdrant (503 si no responde, 502 si contestó con un error), `TaskCanceledException` es que tardó más de `Qdrant:SegundosDeEspera`, y `SqlException` es SQL Server. No falla: SQL ya quedó bien, y la próxima vez que se llame se pone al día.
 - **Recibe:** la lista del detalle de `/indexar` o `/vectores` y el token de cancelación.
 - **Devuelve:** nada. Agrega al detalle una línea que empieza con `QDRANT:` o con `AVISO:`.
 - **Efectos:** lee `rag.Fragmento` y escribe en Qdrant.
 - **La llaman:** Indexador.IndexarCarpetaAsync y Vectorizador.CalcularPendientesAsync.
 - **Desde:** fase-7-qdrant.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-8-validaciones (el aviso dice qué tipo de error trae Qdrant).
 
 ### Sincronizador.ReconstruirAsync(ct)
 
@@ -1231,6 +1336,30 @@ RAG-BASICO\
 - **Efectos:** ninguno.
 - **La llaman:** Sincronizador.MuestraCoincideAsync.
 - **Desde:** fase-7-qdrant.
+- **Cambió en:** nada todavía.
+
+## RagBasico.Api\Validador.cs
+
+- **Responsabilidad:** controlar lo que llega en un pedido antes de usarlo, para responder un error claro en lugar de buscar con algo que no sirve.
+- **Desde:** fase-8-validaciones.
+- **Cambió en:** nada todavía.
+
+### Clase Validador
+
+- **Responsabilidad:** las reglas de lo que se acepta. Es estática: no guarda nada.
+- **Recibe en el constructor:** nada; una clase estática no tiene constructor.
+- **La registra:** nadie. Se usa directo: `Validador.RevisarPregunta(...)`.
+- **Desde:** fase-8-validaciones.
+- **Cambió en:** nada todavía.
+
+### Validador.RevisarPregunta(pregunta, maximo)
+
+- **Qué hace:** controla una pregunta, en este orden: que no esté vacía (ni sea solo espacios, ni falte en el JSON), que no pase el máximo de caracteres, que no tenga caracteres de control (los saltos de línea y las tabulaciones sí se aceptan) y que tenga alguna letra o número.
+- **Recibe:** la pregunta, que puede ser `null`, y el máximo de caracteres (`Rag:LargoMaximoPregunta`).
+- **Devuelve:** el motivo del rechazo, para mostrárselo a quien preguntó; o vacío si la pregunta está bien.
+- **Efectos:** ninguno.
+- **La llaman:** los endpoints `GET /buscar` y `POST /preguntar`.
+- **Desde:** fase-8-validaciones.
 - **Cambió en:** nada todavía.
 
 ## RagBasico.Api\Vectorizador.cs
@@ -1294,11 +1423,11 @@ RAG-BASICO\
 
 - **Responsabilidad:** la configuración de la API. Cada clave está explicada en `docs\arquitectura.md`.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant, fase-8-validaciones.
 
 ## RagBasico.Api\wwwroot\index.html
 
-- **Responsabilidad:** la página de la demo: una caja para la pregunta, el selector de modo (híbrida, solo palabras, solo vectores en SQL Server o solo vectores en Qdrant) y la respuesta con sus fuentes y los tiempos. La sirve la propia API en la raíz, `http://127.0.0.1:5087/`.
+- **Responsabilidad:** la página de la demo: una caja para la pregunta, el selector de modo (híbrida, solo palabras, solo vectores en SQL Server o solo vectores en Qdrant) y la respuesta con sus fuentes y los tiempos. La sirve la propia API en la raíz, `http://127.0.0.1:5088/`.
 - **Contiene:** HTML, el estilo y un script, todo en el mismo archivo y sin nada de internet, para que la demo ande sin conexión. El script:
   - manda la pregunta y el modo a `POST /preguntar` con `fetch`;
   - muestra el aviso, arriba de la respuesta, si la híbrida siguió sin Qdrant;
@@ -1320,7 +1449,7 @@ RAG-BASICO\
 
 - **Responsabilidad:** cómo se arma esta versión: las piezas, los recorridos paso a paso, las tablas, la configuración y lo que está fuera del repo.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant, fase-8-validaciones.
 
 ## docs\erratas.md
 
@@ -1376,17 +1505,23 @@ RAG-BASICO\
 - **Desde:** fase-7-qdrant.
 - **Cambió en:** nada todavía.
 
+## docs\fases\fase-8-validaciones.md
+
+- **Responsabilidad:** qué agregó la fase 8, en qué orden leerla, cómo probarla, qué se midió y qué se decidió.
+- **Desde:** fase-8-validaciones.
+- **Cambió en:** nada todavía.
+
 ## docs\instalacion.md
 
 - **Responsabilidad:** qué hay que instalar para correr todas las fases, en el orden en que las fases lo necesitan: cómo instalar cada pieza, cómo comprobar que anda, qué arrancar cada vez y qué hacer si algo falla.
 - **Desde:** fase-7-qdrant.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-8-validaciones.
 
 ## docs\responsabilidades.md
 
 - **Responsabilidad:** este documento: qué hace cada archivo, clase, función y endpoint, y quién lo usa.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant, fase-8-validaciones.
 
 ## docs\worktrees.md
 
