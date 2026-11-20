@@ -32,7 +32,7 @@ public sealed class Redactor
         _buscador = buscador;
         _ollama = ollama;
         _log = log;
-        _conexion = config.GetConnectionString("Rag") ?? throw new InvalidOperationException("Falta ConnectionStrings:Rag en la configuración.");
+        _conexion = config["Conexiones:SqlTextos"] ?? throw new InvalidOperationException("Falta Conexiones:SqlTextos en la configuración.");
         _topK = config.GetValue("Rag:TopK", 5);
     }
 
@@ -40,14 +40,13 @@ public sealed class Redactor
     public async Task<RespuestaRag> ResponderAsync(string pregunta, string modo, CancellationToken ct)
     {
         Stopwatch reloj = Stopwatch.StartNew();
-        ResultadoBusqueda busqueda = await _buscador.BuscarAsync(pregunta, modo, _topK, ct);
-        List<Fragmento> fragmentos = busqueda.Fragmentos;
+        List<Fragmento> fragmentos = await _buscador.BuscarAsync(pregunta, modo, _topK, ct);
         int msBusqueda = (int)reloj.ElapsedMilliseconds;
 
         RespuestaRag resultado;
         if (fragmentos.Count == 0)
         {
-            resultado = new RespuestaRag(SinRespuesta, new List<Fuente>(), msBusqueda, 0, 0, 0, 0, busqueda.Aviso);
+            resultado = new RespuestaRag(SinRespuesta, new List<Fuente>(), msBusqueda, 0, 0, 0, 0);
         }
         else
         {
@@ -67,7 +66,7 @@ public sealed class Redactor
                     fuentes.Add(new Fuente(i + 1, fragmentos[i].Archivo, fragmentos[i].FragmentoId));
                 }
             }
-            resultado = new RespuestaRag(texto, fuentes, msBusqueda, msModelo, respuesta.MsCarga, respuesta.MsLectura, respuesta.MsEscritura, busqueda.Aviso);
+            resultado = new RespuestaRag(texto, fuentes, msBusqueda, msModelo, respuesta.MsCarga, respuesta.MsLectura, respuesta.MsEscritura);
         }
 
         await RegistrarAsync(pregunta, modo, fragmentos, resultado);

@@ -6,7 +6,7 @@ namespace RagBasico.Api;
 /// <summary>Habla con Ollama por HTTP: manda el mismo JSON que se mandaría con Postman.</summary>
 public sealed class Ollama
 {
-    /// <summary>Cuántos números tiene cada vector de qwen3-embedding:0.6b. La columna rag.Fragmento.Embedding tiene el mismo tamaño.</summary>
+    /// <summary>Cuántos números tiene cada vector de qwen3-embedding:0.6b. La colección de Qdrant se crea con el mismo tamaño.</summary>
     public const int Dimension = 1024;
 
     private readonly HttpClient _http;
@@ -19,8 +19,8 @@ public sealed class Ollama
     public Ollama(HttpClient http, IConfiguration config)
     {
         _http = http;
-        _modeloChat = config["Ollama:ModeloChat"] ?? "qwen3.5:4b";
-        _modeloEmbeddings = config["Ollama:ModeloEmbeddings"] ?? "qwen3-embedding:0.6b";
+        _modeloChat = config["Conexiones:ModeloChat"] ?? "qwen3.5:4b";
+        _modeloEmbeddings = config["Conexiones:ModeloEmbeddings"] ?? "qwen3-embedding:0.6b";
         _instruccion = config["Ollama:InstruccionPregunta"] ?? "Given a question, retrieve relevant passages that answer the question";
         _mantenerCargado = config["Ollama:MantenerCargado"] ?? "30m";
     }

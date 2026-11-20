@@ -480,3 +480,6 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Las conexiones de la oficina: servidores y claves que no se suben
+conexiones.json

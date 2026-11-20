@@ -20,10 +20,10 @@ public sealed class Qdrant
     public Qdrant(HttpClient http, IConfiguration config)
     {
         _http = http;
-        _coleccion = config["Qdrant:Coleccion"] ?? "fragmentos";
+        _coleccion = config["Conexiones:ColeccionQdrant"] ?? "fragmentos";
     }
 
-    /// <summary>El nombre de la colección de esta fase.</summary>
+    /// <summary>El nombre de la colección.</summary>
     public string Coleccion
     {
         get { return _coleccion; }

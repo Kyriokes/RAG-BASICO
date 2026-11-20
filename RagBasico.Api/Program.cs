@@ -2,25 +2,25 @@ using RagBasico.Api;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Las conexiones de la oficina: si existe conexiones.json al lado de appsettings.json, sus líneas pisan a las de appsettings.json.
+// Git lo ignora, así los nombres de los servidores y las claves no se suben.
+builder.Configuration.AddJsonFile("conexiones.json", optional: true, reloadOnChange: false);
+
 // Ollama como cliente HTTP: la dirección y el tiempo de espera salen de la configuración.
 builder.Services.AddHttpClient<Ollama>(cliente =>
 {
-    cliente.BaseAddress = new Uri(builder.Configuration["Ollama:Url"] ?? "http://127.0.0.1:11434");
+    cliente.BaseAddress = new Uri(builder.Configuration["Conexiones:Ollama"] ?? "http://127.0.0.1:11434");
     cliente.Timeout = TimeSpan.FromSeconds(builder.Configuration.GetValue("Ollama:SegundosDeEspera", 300));
 }).AddHttpMessageHandler(() => new DetectorDeCaidas("Ollama"));
-// Qdrant también como cliente HTTP. El tiempo de espera es corto: si Qdrant no responde, la híbrida sigue con SQL.
+// Qdrant también como cliente HTTP, con un tiempo de espera corto.
 builder.Services.AddHttpClient<Qdrant>(cliente =>
 {
-    cliente.BaseAddress = new Uri(builder.Configuration["Qdrant:Url"] ?? "http://127.0.0.1:6333");
+    cliente.BaseAddress = new Uri(builder.Configuration["Conexiones:Qdrant"] ?? "http://127.0.0.1:6333");
     cliente.Timeout = TimeSpan.FromSeconds(builder.Configuration.GetValue("Qdrant:SegundosDeEspera", 10));
 }).AddHttpMessageHandler(() => new DetectorDeCaidas("Qdrant"));
 // Un objeto nuevo de cada uno por pedido HTTP.
-builder.Services.AddScoped<Sincronizador>();
-builder.Services.AddScoped<Indexador>();
-builder.Services.AddScoped<Vectorizador>();
 builder.Services.AddScoped<Buscador>();
 builder.Services.AddScoped<Redactor>();
-builder.Services.AddScoped<Evaluador>();
 builder.Services.AddScoped<Salud>();
 // Los errores salen como ProblemDetails: un JSON con título, detalle y código HTTP, en lugar de un 500 genérico.
 builder.Services.AddProblemDetails();
@@ -30,47 +30,6 @@ builder.Services.AddExceptionHandler<ManejadorDeErrores>();
 builder.Services.Configure<RouteHandlerOptions>(opciones => opciones.ThrowOnBadRequest = true);
 
 var app = builder.Build();
-
-// Antes de escuchar, controla lo que la API no puede no tener: la base y los dos modelos.
-// Qdrant no, porque la demo sigue sin él. Con Rag:ChequearAlArrancar en false, arranca igual.
-if (app.Configuration.GetValue("Rag:ChequearAlArrancar", true))
-{
-    List<Chequeo> problemas = new List<Chequeo>();
-    try
-    {
-        using (IServiceScope alcance = app.Services.CreateScope())
-        {
-            problemas = await alcance.ServiceProvider.GetRequiredService<Salud>().RevisarArranqueAsync(CancellationToken.None);
-        }
-    }
-    catch (Exception ex)
-    {
-        // Un error al armar los servicios, como un tiempo de espera en 0 en la configuración, también frena el arranque, con su motivo.
-        problemas.Add(new Chequeo("Configuración", "error", ex.Message));
-    }
-    if (problemas.Count > 0)
-    {
-        foreach (Chequeo problema in problemas)
-        {
-            app.Logger.LogCritical("La API no arranca. {Nombre}: {Detalle}", problema.Nombre, problema.Detalle);
-        }
-        // Liberar la aplicación vacía el log antes de salir; si no, los mensajes se pueden perder.
-        await app.DisposeAsync();
-        Environment.ExitCode = 1;
-        return;
-    }
-}
-
-// Al arrancar, la API dice qué carpeta de PDF va a usar, o avisa que no existe.
-string carpeta = app.Configuration["Rag:CarpetaDocumentos"] ?? "";
-if (carpeta.Length > 0 && Directory.Exists(carpeta))
-{
-    app.Logger.LogInformation("Carpeta de PDF: {Carpeta}", Path.GetFullPath(carpeta));
-}
-else
-{
-    app.Logger.LogWarning("No existe la carpeta de PDF '{Carpeta}'. Configurá la variable de entorno Rag__CarpetaDocumentos.", carpeta);
-}
 
 // Cuando la API ya está escuchando, carga los dos modelos en Ollama en segundo plano:
 // así la primera pregunta de la demo no espera 30 segundos. Si falla, solo queda en el log.
@@ -99,8 +58,8 @@ app.UseExceptionHandler();
 // Las respuestas de error sin cuerpo, como un 404, un 405 o un 415, salen también como ProblemDetails.
 app.UseStatusCodePages();
 
-// La página de la demo: wwwroot\index.html. UseDefaultFiles hace que "/" muestre index.html,
-// y UseStaticFiles sirve los archivos de wwwroot. Por eso la información del proyecto pasa a /info.
+// Las páginas: wwwroot\index.html y lo que tenga al lado. UseDefaultFiles hace que "/" muestre index.html,
+// y UseStaticFiles sirve los archivos de wwwroot. Por eso la información del proyecto está en /info.
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
@@ -110,12 +69,6 @@ app.MapGet("/info", () => new
     fase = app.Configuration["Rag:Fase"],
     dotnet = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription
 });
-
-app.MapPost("/indexar", async (Indexador indexador, CancellationToken ct) =>
-    await indexador.IndexarCarpetaAsync(ct));
-
-app.MapPost("/vectores", async (Vectorizador vectorizador, CancellationToken ct) =>
-    await vectorizador.CalcularPendientesAsync(ct));
 
 // Una pregunta que no sirve o un modo mal escrito dan un error 400 que dice el motivo,
 // en lugar de buscar con algo que no sirve o con otro modo sin avisar.
@@ -151,10 +104,7 @@ app.MapPost("/preguntar", async (PedidoPregunta pedido, Redactor redactor, Cance
     return Results.Ok(await redactor.ResponderAsync(pedido.Pregunta, elegido, ct));
 });
 
-app.MapPost("/evaluar", async (Evaluador evaluador, CancellationToken ct) =>
-    await evaluador.CorrerAsync(ct));
-
-// 503 si falta algo sin lo que la demo no anda. Con avisos, como Qdrant apagado, 200: la demo sigue andando.
+// 503 si falta algo sin lo que no se puede preguntar. Con avisos, 200.
 app.MapGet("/salud", async (Salud salud, CancellationToken ct) =>
 {
     InformeSalud informe = await salud.RevisarAsync(ct);
@@ -164,11 +114,5 @@ app.MapGet("/salud", async (Salud salud, CancellationToken ct) =>
     }
     return Results.Ok(informe);
 });
-
-app.MapGet("/qdrant/estado", async (Sincronizador sincronizador, CancellationToken ct) =>
-    await sincronizador.EstadoAsync(ct));
-
-app.MapPost("/qdrant/reconstruir", async (Sincronizador sincronizador, CancellationToken ct) =>
-    await sincronizador.ReconstruirAsync(ct));
 
 app.Run();
