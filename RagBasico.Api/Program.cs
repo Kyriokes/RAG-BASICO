@@ -17,9 +17,12 @@ builder.Services.AddHttpClient<Qdrant>(cliente => Qdrant.Configurar(cliente, bui
     .AddHttpMessageHandler(() => new DetectorDeCaidas("Qdrant"));
 // Un objeto nuevo de cada uno por pedido HTTP.
 builder.Services.AddScoped<Documentos>();
+builder.Services.AddScoped<Cargador>();
 builder.Services.AddScoped<Buscador>();
 builder.Services.AddScoped<Redactor>();
 builder.Services.AddScoped<Salud>();
+// El trabajo en segundo plano: arranca con la API y procesa los documentos pendientes, de a uno.
+builder.Services.AddHostedService<Procesador>();
 // Los errores salen como ProblemDetails: un JSON con título, detalle y código HTTP, en lugar de un 500 genérico.
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<ManejadorDeErrores>();
