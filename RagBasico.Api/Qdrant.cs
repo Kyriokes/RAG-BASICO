@@ -16,11 +16,12 @@ public sealed class Qdrant
         _coleccion = config["Conexiones:ColeccionQdrant"] ?? "fragmentos";
     }
 
-    /// <summary>Prepara el HttpClient de Qdrant: la dirección, el tiempo de espera y, si la configuración trae una clave, el encabezado api-key en todos los pedidos.</summary>
+    /// <summary>Prepara el HttpClient de Qdrant: la dirección, el tiempo de espera de respaldo y, si la configuración trae una clave, el encabezado api-key en todos los pedidos.</summary>
     public static void Configurar(HttpClient cliente, IConfiguration config)
     {
         cliente.BaseAddress = new Uri(config["Conexiones:Qdrant"] ?? "http://127.0.0.1:6333");
-        cliente.Timeout = TimeSpan.FromSeconds(config.GetValue("Qdrant:SegundosDeEspera", 10));
+        // 10 segundos más que el reloj del DetectorDeCaidas: es solo un respaldo.
+        cliente.Timeout = TimeSpan.FromSeconds(config.GetValue("Qdrant:SegundosDeEspera", 30) + 10);
         string clave = config["Conexiones:ClaveQdrant"] ?? "";
         if (clave.Trim().Length > 0)
         {
@@ -57,7 +58,7 @@ public sealed class Qdrant
         }
     }
 
-    /// <summary>Crea la colección: vectores de 1024 números comparados por coseno, con los dos umbrales bajos para que el índice HNSW se arme y se use aun con pocos vectores.</summary>
+    /// <summary>Crea la colección: vectores de 1024 números comparados por coseno, con los dos umbrales bajos para que el índice HNSW se arme y se use aun con pocos vectores, y un índice sobre el número de documento.</summary>
     public async Task CrearColeccionAsync(CancellationToken ct)
     {
         var pedido = new
@@ -70,6 +71,12 @@ public sealed class Qdrant
             optimizers_config = new { indexing_threshold = 10 }
         };
         using (HttpResponseMessage respuesta = await _http.PutAsJsonAsync("/collections/" + _coleccion, pedido, ct))
+        {
+            await VerificarAsync(respuesta, ct);
+        }
+        // Un índice sobre el dato documentoId: sin él, borrar los puntos de un documento recorre toda la colección.
+        var indice = new { field_name = "documentoId", field_schema = "integer" };
+        using (HttpResponseMessage respuesta = await _http.PutAsJsonAsync("/collections/" + _coleccion + "/index?wait=true", indice, ct))
         {
             await VerificarAsync(respuesta, ct);
         }

@@ -12,7 +12,13 @@ function mostrarEstado(elemento) {
     } catch (e) {
       informe = null;
     }
-    dibujarSalud(informe);
+    try {
+      dibujarSalud(informe);
+    } finally {
+      // El próximo pedido se programa recién cuando terminó este: si /salud tarda, porque un servidor no contesta,
+      // los pedidos no se apilan uno arriba del otro. Va en el finally para que se programe aunque dibujar falle.
+      setTimeout(pedirSalud, 15000);
+    }
   }
 
   function dibujarSalud(informe) {
@@ -49,5 +55,4 @@ function mostrarEstado(elemento) {
   }
 
   pedirSalud();
-  setInterval(pedirSalud, 15000);
 }

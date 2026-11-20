@@ -75,7 +75,7 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 
 1. **La configuración:** carga `conexiones.json` si existe.
 2. **Los servicios** (`builder.Services.Add...`): le dice a ASP.NET Core qué clases existen, para que las arme cuando alguien las pida. `Ollama` y `Qdrant` son clientes HTTP; `Documentos`, `Cargador`, `Buscador`, `Redactor` y `Salud` se crean nuevos en cada pedido; `Procesador` arranca con la API y queda corriendo.
-3. **El manejo de errores y los archivos de las páginas** (`app.Use...`).
+3. **El manejo de errores, el control de origen y los archivos de las páginas** (`app.Use...`). El control de origen hace que los pedidos que cambian algo solo se acepten de las páginas de la propia API; si vienen de otra, responde 403.
 4. **Los pedidos** (`app.MapGet`, `app.MapPost`, `app.MapDelete`): cada uno es una dirección de la API y la función que la atiende. Casi todos tienen dos o tres líneas: controlan lo que llegó y llaman a una clase.
 
 **Nuevo viniendo de VB.NET:**
@@ -118,8 +118,9 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 1. `EsPdf`, `CalcularHuella`, `ParametrosDeCorte`, `EstimarFalta`: cuatro funciones sueltas (`static`), sin base de datos. Son las más fáciles.
 2. `AnotarSubidosAsync`: lo que pasa cuando se sueltan archivos en la página. Por cada uno: ¿es un PDF? ¿ya estaba? ¿cambió?
 3. `AnotarOrigenAsync`: lo mismo para la base de origen. Corre la consulta de la lista y anota los que faltan, de a 1.000.
-4. `SiguientePendienteAsync` y `LeerContenidoAsync`: lo que le pide el `Cargador`.
-5. `MarcarAsync`, `ResumirAsync`, `BorrarAsync`, `ReintentarAsync`, `ReprocesarTodoAsync`.
+4. `SumarIntentoAsync`, `DevolverIntentoAsync` y `MarcarListoAsync`: lo que usa el `Cargador` para llevar la cuenta de los intentos y cerrar un documento.
+5. `SiguientePendienteAsync` y `LeerContenidoAsync`: lo que le pide el `Cargador`.
+6. `MarcarAsync`, `ResumirAsync`, `BorrarAsync`, `ReintentarAsync`, `ReprocesarTodoAsync`.
 
 **Nuevo viniendo de VB.NET:**
 
@@ -139,6 +140,7 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 - *¿Y si en la otra base hay dos PDF con el mismo nombre?* No se pisan: un importado se reconoce por su número, no por su nombre.
 - *¿Para qué es `Turno`?* Para que "borrar" y "reprocesar todo" no le saquen los fragmentos a un documento que el `Cargador` está procesando en ese momento.
 - *¿Cómo sabe cuánto falta?* Cuenta cuántos documentos se terminaron en los últimos 10 minutos (`FechaProceso`) y divide los pendientes por esa velocidad. No guarda nada en memoria: todo sale de la tabla.
+- *¿Para qué es la columna `Intentos`?* Cuenta cuántas veces se empezó a procesar un documento sin terminar. Al tercero queda en `error`. Sin eso, un PDF que cuelga el lector frenaría la cola para siempre.
 
 ### `RagBasico.Api\Procesador.cs`
 
@@ -158,7 +160,8 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 
 - *¿Qué pasa si se apaga la API a mitad de un documento?* Ese documento sigue `pendiente`. Al volver a arrancar se procesa de nuevo, desde cero.
 - *¿Por qué de a uno y no varios a la vez?* La velocidad la pone el modelo de embeddings, que atiende de a un pedido. Varios a la vez no irían más rápido, y de a uno nunca hay dos documentos pisándose.
-- *¿Y si un PDF está roto? ¿Frena todo?* No. Ese queda en `error` con el motivo y se sigue con el próximo. Lo que frena es un servidor que no responde, y ahí conviene frenar: si no, quedarían todos en error.
+- *¿Y si un PDF está roto? ¿Frena todo?* No. Ese queda en `error` con el motivo y se sigue con el próximo. Lo que frena es un servidor que no responde o que está mal configurado, como un modelo de Ollama sin bajar, y ahí conviene frenar: si no, quedarían todos en error.
+- *¿Cómo me entero de que está frenado?* La página "Documentos" lo muestra en rojo, con el servidor y el motivo. El `Procesador` guarda ese aviso en `Procesador.Aviso` y `GET /documentos` lo devuelve.
 
 ### `RagBasico.Api\Cargador.cs`
 
@@ -167,14 +170,15 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 **Orden de lectura:**
 
 1. `ProcesarSiguienteAsync`: pide el próximo pendiente, toma el turno y llama a `ProcesarAsync`.
-2. `ProcesarAsync`: los seis pasos, numerados en los comentarios.
+2. `ProcesarAsync`: los pasos, numerados en los comentarios.
+   0. Cuenta el intento. Si ya van tres sin terminar, borra lo que hubiera dejado y lo deja en `error`.
    1. Borra lo que hubiera quedado de un intento anterior.
    2. Consigue los bytes del PDF.
    3. Saca el texto (`SacarTexto`) y se fija si es un escaneo (`EsEscaneado`).
    4. Lo corta (`Chunker.Partir`) y guarda los fragmentos en SQL.
    5. De a 16 fragmentos, pide los vectores a Ollama y los sube a Qdrant.
-   6. Lo marca `listo`.
-3. El `catch` del final: decide si el problema fue del documento o de un servidor (`EsDeUnServidor`).
+   6. Lo marca `listo`, si sigue siendo el mismo PDF.
+3. El `catch` del final: decide de quién fue la culpa. De un servidor (`EsDeUnServidor`): queda pendiente y se espera. No se sabe (`EsPasajero`): se reintenta hasta tres veces. Del documento: se borran los vectores que llegó a subir y queda en `error`.
 4. `SacarTexto`, `EsEscaneado`, `RevisarTexto`: las tres funciones sueltas.
 
 **Te pueden preguntar:**
@@ -182,7 +186,9 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 - *¿Por qué empieza borrando?* Para que procesar dos veces el mismo documento dé siempre lo mismo. Si un intento quedó a medias, no quedan fragmentos ni vectores duplicados.
 - *¿Cómo sabe que un PDF es un escaneo?* Cuenta las palabras: menos de 40 por página en promedio. Un escaneo es una foto, no tiene texto.
 - *¿Por qué recién al final lo marca `listo`?* Porque la búsqueda solo mira los documentos `listo`. Uno a medio procesar no aparece.
-- *¿Qué pasa si Qdrant se cae en el paso 5?* El error es "de un servidor": se borran los fragmentos que se habían guardado, el documento sigue `pendiente` y el `Procesador` espera y reintenta.
+- *¿Qué pasa si Qdrant se cae en el paso 5?* El error es "de un servidor": se borran los fragmentos que se habían guardado, el documento sigue `pendiente`, no gasta un intento, y el `Procesador` espera y reintenta.
+- *¿Y si alguien reemplaza el PDF justo mientras se procesa?* Al final se marca `listo` solo si la huella es la misma con que se empezó. Si cambió, se descarta lo armado y se procesa el nuevo.
+- *¿Y si un PDF deja al lector dando vueltas?* Se lo espera 5 minutos. Si no termina, queda en `error` y se sigue.
 - *¿Por qué cada fragmento empieza con `Documento: <nombre>`?* Para que la búsqueda también lo encuentre por el nombre del documento.
 - *¿Con qué se lee el PDF?* Con PdfPig, una librería de código abierto. Es el único paquete, junto con Dapper y el cliente de SQL Server.
 
@@ -287,7 +293,7 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 **Te pueden preguntar:**
 
 - *¿Qué pasa si falta un servidor?* La API arranca igual y la franja lo muestra en rojo, con el nombre del servidor, la dirección y qué hacer.
-- *¿Cómo se sabe si Qdrant quedó desparejo con SQL?* Compara la cantidad de puntos con la cantidad de fragmentos de los documentos listos. Si no coinciden, avisa y dice "Reprocesar todo".
+- *¿Cómo se sabe si Qdrant quedó desparejo con SQL?* Compara la cantidad de puntos con la cantidad de fragmentos. Si Qdrant tiene más puntos que fragmentos hay en la base, trae puntos de otra carga. Y sin pendientes, las dos cantidades tienen que ser iguales. Si no, avisa y dice "Reprocesar todo".
 - *¿Muestra la clave de SQL en el mensaje?* No. `Describir` saca de la cadena solo el servidor y la base.
 
 ### Los cuatro archivos de errores
@@ -295,9 +301,9 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 Son cortos y se leen juntos, en este orden:
 
 1. `ErrorDeServicio.cs`: un tipo de error propio, que lleva el nombre del servicio y el código HTTP.
-2. `DetectorDeCaidas.cs`: va delante de los clientes de Ollama y de Qdrant. Si no se puede conectar, cambia el error genérico por un `ErrorDeServicio` que dice "Qdrant no responde en http://...".
+2. `DetectorDeCaidas.cs`: va delante de los clientes de Ollama y de Qdrant, y lleva el reloj de cada pedido. Si no se puede conectar, o no contesta a tiempo, cambia el error genérico por un `ErrorDeServicio` que dice "Qdrant no responde en http://..." o "Qdrant no respondió a tiempo en http://...".
 3. `Errores.cs`: `EsCaida` dice si un error es un servidor que no responde, o uno que sí respondió con un error.
-4. `ManejadorDeErrores.cs`: atiende cualquier error que nadie atrapó y lo convierte en una respuesta con título, detalle y código: 503 si un servidor no responde, 502 si respondió con un error, 504 si tardó demasiado, 400 si el pedido está mal, 413 si la subida es muy grande.
+4. `ManejadorDeErrores.cs`: atiende cualquier error que nadie atrapó y lo convierte en una respuesta con título, detalle y código: 503 si un servidor no responde, 502 si respondió con un error, 504 si no respondió a tiempo, 400 si el pedido está mal, 413 si la subida es muy grande.
 
 **Te pueden preguntar:**
 
@@ -310,7 +316,7 @@ Los tipos de datos que van y vienen: lo que se manda a `/preguntar`, lo que devu
 
 ### `RagBasico.Api\wwwroot\estado.js` y `estilos.css`
 
-`estado.js` es una función, `mostrarEstado`: pide `GET /salud` cada 15 segundos y dibuja un punto por chequeo. `estilos.css` tiene los colores y las formas que comparten las dos páginas, en claro y en oscuro.
+`estado.js` es una función, `mostrarEstado`: pide `GET /salud`, vuelve a pedirlo 15 segundos después de cada respuesta y dibuja un punto por chequeo. `estilos.css` tiene los colores y las formas que comparten las dos páginas, en claro y en oscuro.
 
 ### Los scripts
 
@@ -350,7 +356,7 @@ Conviene decirlo antes de que lo pregunten:
 - **No lee PDF escaneados.** Quedan como `sin texto`. Leerlos pide OCR, que es otro paso.
 - **No tiene usuarios ni permisos.** La API escucha solo en la PC donde corre. Para abrirla a una red hay que agregar eso primero.
 - **Procesa un documento por vez.** La velocidad la pone el modelo de embeddings: entre 6 y 13 fragmentos por segundo en la PC de prueba.
-- **No se probó con decenas de miles de documentos.** Se probó con 13 PDF. El diseño lo contempla (lee la lista de a una fila, anota de a 1.000, tiene índices por estado), pero la primera carga grande es la prueba real.
+- **No se probó con decenas de miles de documentos.** Se probó con 13 PDF. El diseño lo contempla (anota de a 1.000, tiene índices por estado, tope de intentos, borra de a 20.000), pero la primera carga grande es la prueba real.
 - **No mide la calidad de las respuestas con números.** Hasta la fase 8 había un examen automático; se sacó porque no hay preguntas escritas para los documentos reales. Sigue en la branch `fase-8-validaciones`.
 - **No responde lo que no está en los documentos.** Eso es a propósito.
 

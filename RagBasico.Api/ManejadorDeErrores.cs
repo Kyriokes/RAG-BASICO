@@ -31,7 +31,15 @@ public sealed class ManejadorDeErrores : IExceptionHandler
         ErrorDeServicio? deServicio = error as ErrorDeServicio;
         if (deServicio != null)
         {
-            string titulo = deServicio.CodigoHttp == 503 ? deServicio.Servicio + " no responde" : deServicio.Servicio + " respondió con un error";
+            string titulo = deServicio.Servicio + " respondió con un error";
+            if (deServicio.CodigoHttp == 503)
+            {
+                titulo = deServicio.Servicio + " no responde";
+            }
+            if (deServicio.CodigoHttp == 504)
+            {
+                titulo = deServicio.Servicio + " no respondió a tiempo";
+            }
             return Problema(deServicio.CodigoHttp, titulo, deServicio.Message);
         }
         if (error is SqlException)
@@ -42,7 +50,7 @@ public sealed class ManejadorDeErrores : IExceptionHandler
         if (error is TaskCanceledException && error.InnerException is TimeoutException)
         {
             return Problema(504, "Un servicio tardó demasiado",
-                "Ollama o Qdrant no respondieron a tiempo (Ollama:SegundosDeEspera y Qdrant:SegundosDeEspera). " + error.Message);
+                "Un servicio no respondió a tiempo. " + error.Message);
         }
         // Un pedido que ASP.NET Core no pudo leer, como un JSON roto o un parámetro que falta, ya trae su código (400).
         BadHttpRequestException? malArmado = error as BadHttpRequestException;

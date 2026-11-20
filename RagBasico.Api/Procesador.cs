@@ -7,6 +7,15 @@ public sealed class Procesador : BackgroundService
     private static readonly TimeSpan EsperaSinTrabajo = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan EsperaConError = TimeSpan.FromSeconds(30);
 
+    // Por qué está frenada la carga, o vacío si anda. Lo lee GET /documentos para mostrarlo en la página.
+    private static volatile string _aviso = "";
+
+    /// <summary>Por qué está frenada la carga de documentos, o vacío si anda.</summary>
+    public static string Aviso
+    {
+        get { return _aviso; }
+    }
+
     private readonly IServiceScopeFactory _alcances;
     private readonly ILogger<Procesador> _log;
 
@@ -37,6 +46,7 @@ public sealed class Procesador : BackgroundService
                     }
                 }
                 ultimoError = "";
+                _aviso = "";
             }
             catch (OperationCanceledException) when (apagado.IsCancellationRequested)
             {
@@ -48,9 +58,10 @@ public sealed class Procesador : BackgroundService
                 // El mismo error no se repite en el log cada 30 segundos: se anota cuando cambia.
                 if (ex.Message != ultimoError)
                 {
-                    _log.LogWarning("La carga de documentos está frenada: {Mensaje} Se reintenta cada 30 segundos.", ex.Message);
+                    _log.LogWarning(ex, "La carga de documentos está frenada. Se reintenta cada 30 segundos.");
                     ultimoError = ex.Message;
                 }
+                _aviso = "La carga de documentos está frenada: " + ex.Message + " Se reintenta sola cada 30 segundos.";
                 espera = EsperaConError;
             }
 

@@ -154,13 +154,13 @@ RAG-BASICO\
 
 ### Buscador.PorPalabrasAsync(pregunta, topK, ct)
 
-- **Qué hace:** busca en el Full-Text de SQL Server los fragmentos que mejor coinciden con las palabras de la pregunta. `FREETEXTTABLE` corta la pregunta en palabras, busca también sus plurales y conjugaciones, y le pone un puntaje (`RANK`) a cada fragmento. Se piden los 50 mejores y se devuelven los `topK` primeros. Solo cuentan los documentos en estado `listo`: uno a medio procesar todavía no tiene sus vectores.
+- **Qué hace:** busca en el Full-Text de SQL Server los fragmentos que mejor coinciden con las palabras de la pregunta. `FREETEXTTABLE` corta la pregunta en palabras, busca también sus plurales y conjugaciones, y le pone un puntaje (`RANK`) a cada fragmento. Se piden los 200 mejores y se devuelven los `topK` primeros. Solo cuentan los documentos en estado `listo`: uno a medio procesar todavía no tiene sus vectores. Por eso se piden 200 y no menos: si los primeros son de un documento a medio procesar, igual quedan otros para elegir.
 - **Recibe:** la pregunta, cuántos fragmentos devolver y el token de cancelación.
 - **Devuelve:** una lista de `Fragmento` (número, archivo y texto), del más relevante al menos relevante. Vacía si la pregunta está vacía o si ninguna palabra coincide.
 - **Efectos:** lee `rag.Fragmento` y `rag.Documento`. No escribe nada.
 - **La llaman:** Buscador.BuscarAsync y Buscador.HibridaAsync.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-9-local (solo los documentos listos).
+- **Cambió en:** fase-9-local (solo los documentos listos, y pide 200 candidatos en lugar de 50).
 
 ### Buscador.PorVectoresAsync(pregunta, topK, ct)
 
@@ -185,7 +185,7 @@ RAG-BASICO\
 ## RagBasico.Api\Cargador.cs
 
 - **Responsabilidad:** procesar un documento pendiente de punta a punta: sacar el texto del PDF, cortarlo, guardar los fragmentos, calcular sus vectores y subirlos a Qdrant.
-- **Contiene:** la clase `Cargador`, su constante privada `PalabrasPorPaginaMinimas` (40), el promedio de palabras por página por debajo del cual un PDF se toma como escaneado, y su record privado `FragmentoNuevo`, un fragmento recién guardado con su número y su texto.
+- **Contiene:** la clase `Cargador`; tres valores privados: `PalabrasPorPaginaMinimas` (40), el promedio de palabras por página por debajo del cual un PDF se toma como escaneado, `EsperaDeLectura` (5 minutos), lo que se espera a que PdfPig saque el texto de un PDF, y `NumeroDeTiempoVencido` (-2), el número con que SQL Server avisa que se venció el tiempo de una consulta; y su record privado `FragmentoNuevo`, un fragmento recién guardado con su número y su texto.
 - **Desde:** fase-9-local. Junta lo que hasta la fase 8 hacían el `Indexador`, el `Vectorizador` y el `Sincronizador`.
 - **Cambió en:** nada todavía.
 
@@ -201,7 +201,7 @@ RAG-BASICO\
 
 - **Qué hace:** le pide el próximo pendiente a Documentos.SiguientePendienteAsync, toma el turno (`Documentos.Turno`) y lo procesa con Cargador.ProcesarAsync. Mientras tiene el turno, nadie más toca los fragmentos ni los vectores: ni borrar ni reprocesar.
 - **Recibe:** el token de cancelación, que se dispara cuando se apaga la API.
-- **Devuelve:** `false` si no había ningún pendiente; `true` si procesó uno, haya quedado `listo`, `sin texto` o `error`. Si un servidor no responde, lanza el error y el documento queda pendiente.
+- **Devuelve:** `false` si no había ningún pendiente; `true` si procesó uno, haya quedado `listo`, `sin texto` o `error`. Si el error es de un servidor, o puede ser pasajero, lanza el error y el documento queda pendiente.
 - **Efectos:** los de Cargador.ProcesarAsync.
 - **La llaman:** Procesador.ExecuteAsync.
 - **Desde:** fase-9-local.
@@ -209,9 +209,23 @@ RAG-BASICO\
 
 ### Cargador.EsDeUnServidor(error)
 
-- **Qué hace:** dice si un error es de un servidor que no responde y no del documento: una caída de Ollama o de Qdrant (Errores.EsCaida) o cualquier `SqlException`. Un error que el servidor sí contestó, como un texto que Ollama rechaza, es del documento.
+- **Qué hace:** dice si un error es de un servidor y no del documento. Lo es en cuatro casos:
+  - una caída (Errores.EsCaida): Ollama, Qdrant o la base de origen que no responden, o no responden a tiempo;
+  - cualquier `ErrorDeServicio` de Qdrant: Qdrant no rechaza un documento en particular, así que si contesta con un error es la configuración, como una clave mal puesta, o el servidor;
+  - un `ErrorDeServicio` de configuración (`DeConfiguracion`): un modelo de Ollama que no está bajado, o uno que devuelve vectores de otro tamaño. Se repite con cualquier documento, así que la carga se frena con el aviso en lugar de dejar toda la cola en `error`;
+  - un `SqlException` que no sea de tiempo vencido.
 - **Recibe:** el error.
-- **Devuelve:** `true` si es de un servidor.
+- **Devuelve:** `true` si es de un servidor. Entonces el documento queda pendiente y no gasta un intento.
+- **Efectos:** ninguno.
+- **La llaman:** Cargador.ProcesarAsync y Cargador.EsPasajero.
+- **Desde:** fase-9-local.
+- **Cambió en:** nada todavía.
+
+### Cargador.EsPasajero(error)
+
+- **Qué hace:** dice si un error puede ser pasajero o puede ser del documento, y no se sabe cuál: un error que contestó Ollama, la base de origen que tardó demasiado, o una consulta de SQL Server que venció. Si el error es de un servidor (Cargador.EsDeUnServidor), no es pasajero.
+- **Recibe:** el error.
+- **Devuelve:** `true` si puede ser pasajero. Entonces el documento se reintenta con el intento contado, y al tercero queda en `error`.
 - **Efectos:** ninguno.
 - **La llaman:** Cargador.ProcesarAsync.
 - **Desde:** fase-9-local.
@@ -220,16 +234,20 @@ RAG-BASICO\
 ### Cargador.ProcesarAsync(pendiente, ct)
 
 - **Qué hace:** los pasos de un documento, en orden.
-  1. Borra de Qdrant y de SQL lo que hubiera quedado de un intento anterior o de la versión anterior del PDF.
-  2. Lee los bytes del PDF con Documentos.LeerContenidoAsync. Si no están, o no son un PDF, lo deja en `error`.
-  3. Saca el texto con Cargador.SacarTexto. Un PDF roto o con clave queda en `error`; uno escaneado (Cargador.EsEscaneado), en `sin texto`.
-  4. Corta el texto con Chunker.Partir y guarda los fragmentos con Cargador.GuardarFragmentosAsync.
-  5. Crea la colección si no existe, y de a lotes de `Rag:LoteVectores` le pide los vectores a Ollama y los sube a Qdrant, con el número de fragmento como id.
-  6. Lo marca `listo`. Si Cargador.RevisarTexto encontró algo raro, queda anotado en el detalle como `texto dudoso`.
-  - Si algo falla, borra los fragmentos que hubiera guardado. Si el error es de un servidor (Cargador.EsDeUnServidor), el documento queda pendiente y el error sale, para que el `Procesador` espere y reintente. Si no, lo anota en el log y deja el documento en `error` con el mensaje.
+  1. Cuenta el intento. Si el documento ya se empezó 3 veces (`Documentos.IntentosMaximos`) y nunca terminó, es que hace caer o colgar el proceso: borra los fragmentos y los vectores que hubiera dejado el intento que se cortó, lo deja en `error` y no lo procesa. Si no, anota que se empieza con Documentos.SumarIntentoAsync.
+  2. Borra de Qdrant y de SQL lo que hubiera quedado de un intento anterior o de la versión anterior del PDF.
+  3. Lee los bytes del PDF con Documentos.LeerContenidoAsync. Si no están, o no son un PDF, lo deja en `error`.
+  4. Saca el texto con Cargador.SacarTexto, en otro hilo y con un tope de 5 minutos: un PDF mal armado puede dejar a PdfPig dando vueltas sin terminar. Si se pasa del tope, o el PDF está roto o tiene clave, queda en `error`; uno escaneado (Cargador.EsEscaneado), en `sin texto`.
+  5. Corta el texto con Chunker.Partir y guarda los fragmentos con Cargador.GuardarFragmentosAsync.
+  6. Crea la colección si no existe, y de a lotes de `Rag:LoteVectores` le pide los vectores a Ollama y los sube a Qdrant, con el número de fragmento como id.
+  7. Lo marca `listo` con Documentos.MarcarListoAsync, que solo marca si sigue siendo el mismo PDF. Si mientras tanto lo reemplazaron o lo borraron, descarta lo armado: borra sus puntos y sus fragmentos. Si Cargador.RevisarTexto encontró algo raro, queda anotado en el detalle como `texto dudoso`.
+  - Si algo falla, borra los fragmentos que hubiera guardado, y después decide:
+    - si el error es de un servidor (Cargador.EsDeUnServidor), le devuelve el intento, el documento queda pendiente y el error sale, para que el `Procesador` espere y reintente;
+    - si puede ser pasajero (Cargador.EsPasajero) y todavía no es el tercer intento, el documento queda pendiente con el intento contado y el error sale;
+    - si no, borra de Qdrant los vectores que llegó a subir (Cargador.BorrarVectoresSinFallarAsync), lo anota en el log con el error completo y deja el documento en `error` con el mensaje.
 - **Recibe:** el documento pendiente y el token de cancelación.
 - **Devuelve:** nada.
-- **Efectos:** lee el PDF de la base del RAG o de la base de origen; borra y escribe en `rag.Fragmento`; cambia el estado en `rag.Documento`; pedidos a Ollama; borra y sube puntos en Qdrant.
+- **Efectos:** lee el PDF de la base del RAG o de la base de origen; borra y escribe en `rag.Fragmento`; cambia el estado y los intentos en `rag.Documento`; pedidos a Ollama; borra y sube puntos en Qdrant.
 - **La llaman:** Cargador.ProcesarSiguienteAsync.
 - **Desde:** fase-9-local.
 - **Cambió en:** nada todavía.
@@ -260,6 +278,26 @@ RAG-BASICO\
 - **Recibe:** el número del documento. No recibe el token de cancelación: tiene que borrar aunque la API se esté apagando.
 - **Devuelve:** nada.
 - **Efectos:** borra filas de `rag.Fragmento`.
+- **La llaman:** Cargador.ProcesarAsync.
+- **Desde:** fase-9-local.
+- **Cambió en:** nada todavía.
+
+### Cargador.BorrarVectoresSinFallarAsync(documentoId)
+
+- **Qué hace:** borra de Qdrant los vectores de un documento que queda en `error`, con Qdrant.BorrarDeDocumentoAsync. Sin esto, los puntos que se subieron antes del error quedan en la colección y le sacan el lugar a resultados buenos en la búsqueda por vectores. Si tampoco se puede, lo anota en el log y sigue: se borran al reintentar el documento.
+- **Recibe:** el número del documento. No recibe el token de cancelación: tiene que borrar aunque la API se esté apagando.
+- **Devuelve:** nada.
+- **Efectos:** borra puntos de la colección de Qdrant.
+- **La llaman:** Cargador.ProcesarAsync.
+- **Desde:** fase-9-local.
+- **Cambió en:** nada todavía.
+
+### Cargador.DevolverIntentoSinFallarAsync(documentoId)
+
+- **Qué hace:** le devuelve el intento a un documento después de un error de un servidor, con Documentos.DevolverIntentoAsync. Si tampoco se puede, lo anota en el log y sigue: a lo sumo le queda un intento menos.
+- **Recibe:** el número del documento. No recibe el token de cancelación: tiene que devolverlo aunque la API se esté apagando.
+- **Devuelve:** nada.
+- **Efectos:** actualiza una fila de `rag.Documento`.
 - **La llaman:** Cargador.ProcesarAsync.
 - **Desde:** fase-9-local.
 - **Cambió en:** nada todavía.
@@ -358,32 +396,34 @@ RAG-BASICO\
 
 ## RagBasico.Api\DetectorDeCaidas.cs
 
-- **Responsabilidad:** decir qué servicio se cayó. Sin esto, si Ollama o Qdrant no responden, el error es un `HttpRequestException` genérico que no dice de cuál de los dos se trata.
+- **Responsabilidad:** decir qué servicio se cayó o no respondió a tiempo. Sin esto, si Ollama o Qdrant no responden, el error es un `HttpRequestException` o un `TaskCanceledException` genérico que no dice de cuál de los dos se trata.
 - **Desde:** fase-8-validaciones.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-9-local.
 
 ### Clase DetectorDeCaidas
 
-- **Responsabilidad:** un `DelegatingHandler`: una pieza que se pone delante del `HttpClient` y ve pasar cada pedido. Hay uno delante del cliente de Ollama y otro delante del de Qdrant.
-- **Recibe en el constructor:** el nombre del servicio que vigila: `Ollama` o `Qdrant`.
-- **La registra:** Program.cs, con `AddHttpMessageHandler` en cada `AddHttpClient`.
+- **Responsabilidad:** un `DelegatingHandler`: una pieza que se pone delante del `HttpClient` y ve pasar cada pedido. Hay uno delante del cliente de Ollama y otro delante del de Qdrant. Lleva su propio reloj: así, cuando se vence, sabe qué servicio fue.
+- **Recibe en el constructor:** el nombre del servicio que vigila, `Ollama` o `Qdrant`, y cuánto esperarlo.
+- **La registra:** Program.cs, con `AddHttpMessageHandler` en cada `AddHttpClient`, con el tiempo de `Ollama:SegundosDeEspera` o de `Qdrant:SegundosDeEspera`.
 - **Desde:** fase-8-validaciones.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-9-local (recibe cuánto esperar y lleva el reloj).
 
 ### DetectorDeCaidas.SendAsync(pedido, ct)
 
-- **Qué hace:** manda el pedido al servicio. Si no se puede conectar, cambia el `HttpRequestException` por un `ErrorDeServicio` con código 503, el nombre del servicio y la dirección que no respondió, por ejemplo `Ollama no responde en http://127.0.0.1:11434`.
+- **Qué hace:** manda el pedido al servicio, con un reloj propio atado al aviso de cancelación de quien pidió. Así distingue "se venció el tiempo" de "el que pidió se fue", cosa que con el tiempo de espera del `HttpClient` no se puede saber.
+  - Si no se puede conectar, cambia el `HttpRequestException` por un `ErrorDeServicio` con código 503, el nombre del servicio y la dirección que no respondió, por ejemplo `Ollama no responde en http://127.0.0.1:11434`.
+  - Si se vence el reloj sin que nadie haya cancelado, lanza un `ErrorDeServicio` con código 504, que dice el servicio, la dirección y cuántos segundos se esperó. Pasa cuando el servidor está pero no contesta, o cuando un firewall descarta los pedidos sin rechazarlos.
 - **Recibe:** el pedido HTTP y el token de cancelación.
 - **Devuelve:** la respuesta del servicio, sin tocarla.
 - **Efectos:** el pedido HTTP.
 - **La llaman:** el `HttpClient` de Ollama y el de Qdrant, en cada pedido.
 - **Desde:** fase-8-validaciones.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-9-local (el 504 cuando se vence el tiempo).
 
 ## RagBasico.Api\Documentos.cs
 
 - **Responsabilidad:** el registro de los documentos: anota los que llegan, dice cuál sigue, guarda el estado de cada uno, los lista y los borra. No procesa: eso lo hace el `Cargador`.
-- **Contiene:** la clase `Documentos`, con la lista pública `Estados` (`pendiente`, `listo`, `sin texto` y `error`); el `Turno`, un `SemaphoreSlim` de un solo lugar que comparten el `Cargador`, borrar y reprocesar, para no pisarse; la constante privada `PorPagina` (50); y dos records privados: `Anterior`, un documento que ya estaba cargado con el mismo nombre, y `Cuenta`, los números de la base que arman el resumen.
+- **Contiene:** la clase `Documentos`, con la lista pública `Estados` (`pendiente`, `listo`, `sin texto` y `error`); el `Turno`, un `SemaphoreSlim` de un solo lugar que comparten el `Cargador`, borrar y reprocesar, para no pisarse; la constante pública `IntentosMaximos` (3), cuántas veces se intenta procesar un documento antes de dejarlo en `error`; las constantes privadas `PorPagina` (50) y `EsperaDeOrigen` (300 segundos, lo que se espera a la base de origen: un PDF grande por la red puede tardar más que los 30 de siempre); y tres records privados: `DeOrigen`, un documento de la lista de la base de origen, con su número y su nombre; `Anterior`, un documento que ya estaba cargado con el mismo nombre; y `Cuenta`, los números de la base que arman el resumen.
 - **Desde:** fase-9-local.
 - **Cambió en:** nada todavía.
 
@@ -440,7 +480,7 @@ RAG-BASICO\
 - **Qué hace:** anota los archivos que se arrastraron a la página. Compara por nombre de archivo, entre los arrastrados.
   - Un PDF nuevo se guarda con sus bytes y queda `pendiente`.
   - Uno que ya estaba con la misma huella no se toca.
-  - Uno que cambió guarda el contenido nuevo y vuelve a `pendiente`. Los fragmentos y los vectores viejos los borra el `Cargador` antes de procesarlo; mientras tanto no aparece en las búsquedas, porque no está `listo`.
+  - Uno que cambió guarda el contenido nuevo y vuelve a `pendiente`, con los intentos en 0. Los fragmentos y los vectores viejos los borra el `Cargador` antes de procesarlo; mientras tanto no aparece en las búsquedas, porque no está `listo`.
   - Lo que no es un PDF (Documentos.EsPdf) se rechaza.
   - Si en la misma tanda vienen dos con el mismo nombre, vale el último.
 - **Recibe:** la lista de `ArchivoSubido` y el token de cancelación.
@@ -452,7 +492,10 @@ RAG-BASICO\
 
 ### Documentos.AnotarOrigenAsync(ct)
 
-- **Qué hace:** anota como pendientes los documentos de la base de origen que todavía no están. Corre la consulta de `Conexiones:ConsultaLista`, que devuelve el número y el nombre de cada documento, sin traer los PDF. Lee la lista de a una fila, sin cargarla entera en memoria, y guarda de a lotes de 1.000 con Documentos.GuardarLoteAsync. Un documento sin nombre queda como `documento-<número>.pdf`. Si no hay base de origen configurada, lanza un `ErrorDeServicio` con código 400.
+- **Qué hace:** anota como pendientes los documentos de la base de origen que todavía no están, en dos pasos.
+  1. Lee toda la lista de la base de origen con la consulta de `Conexiones:ConsultaLista`, que devuelve el número y el nombre de cada documento, sin traer los PDF. Son dos textos cortos por documento, así que decenas de miles entran en memoria. Espera hasta 300 segundos. Si la base de origen falla, lanza el error que arma Documentos.ErrorDeOrigen.
+  2. Guarda los que todavía no están anotados, de a lotes de 1.000, con Documentos.GuardarLoteAsync. Un número que ya estaba, o que viene repetido en la lista, no se anota de nuevo. Un documento sin nombre queda como `documento-<número>.pdf`.
+  - Si no hay base de origen configurada, lanza un `ErrorDeServicio` con código 400.
 - **Recibe:** el token de cancelación.
 - **Devuelve:** un `InformeAnotado`: cuántos nuevos quedaron pendientes y cuántos ya estaban anotados.
 - **Efectos:** lee la base de origen; lee e inserta filas en `rag.Documento`.
@@ -464,7 +507,7 @@ RAG-BASICO\
 
 - **Qué hace:** busca el próximo documento pendiente. Los arrastrados van antes que los importados: así uno que se suelta en la página no espera detrás de miles. Dentro de cada grupo, el de número más bajo.
 - **Recibe:** el token de cancelación.
-- **Devuelve:** un `Pendiente`, o `null` si no hay ninguno.
+- **Devuelve:** un `Pendiente`, con la huella y los intentos del documento, o `null` si no hay ninguno.
 - **Efectos:** lee `rag.Documento`.
 - **La llaman:** Cargador.ProcesarSiguienteAsync.
 - **Desde:** fase-9-local.
@@ -472,7 +515,7 @@ RAG-BASICO\
 
 ### Documentos.LeerContenidoAsync(pendiente, ct)
 
-- **Qué hace:** trae los bytes del PDF. Si se arrastró, de la columna `Contenido` de la base del RAG. Si se importó, de la base de origen, con la consulta de `Conexiones:ConsultaContenido`, que recibe el número en el parámetro `@Id`. Si hay un importado pendiente y `Conexiones:SqlOrigen` está vacía, lanza un `ErrorDeServicio` con código 503.
+- **Qué hace:** trae los bytes del PDF. Si se arrastró, de la columna `Contenido` de la base del RAG. Si se importó, de la base de origen, con la consulta de `Conexiones:ConsultaContenido`, que recibe el número en el parámetro `@Id`, y esperando hasta 300 segundos. Si la base de origen falla, lanza el error que arma Documentos.ErrorDeOrigen. Si hay un importado pendiente y `Conexiones:SqlOrigen` está vacía, lanza un `ErrorDeServicio` con código 503.
 - **Recibe:** el documento pendiente y el token de cancelación.
 - **Devuelve:** los bytes, o `null` si la fila ya no está o no tiene binario.
 - **Efectos:** lee `rag.Documento` o la base de origen.
@@ -480,9 +523,39 @@ RAG-BASICO\
 - **Desde:** fase-9-local.
 - **Cambió en:** nada todavía.
 
+### Documentos.SumarIntentoAsync(documentoId, ct)
+
+- **Qué hace:** anota que se empieza a procesar un documento: le suma 1 a `Intentos`. Se anota antes de empezar, así si el proceso se cae a la mitad el intento queda contado: es lo que permite reconocer un PDF que cuelga el proceso.
+- **Recibe:** el número del documento y el token de cancelación.
+- **Devuelve:** nada.
+- **Efectos:** actualiza una fila de `rag.Documento`.
+- **La llaman:** Cargador.ProcesarAsync.
+- **Desde:** fase-9-local.
+- **Cambió en:** nada todavía.
+
+### Documentos.DevolverIntentoAsync(documentoId, ct)
+
+- **Qué hace:** le devuelve el intento a un documento que no se pudo procesar porque un servidor no responde: le resta 1 a `Intentos`, sin bajar de 0. No fue culpa del documento.
+- **Recibe:** el número del documento y el token de cancelación.
+- **Devuelve:** nada.
+- **Efectos:** actualiza una fila de `rag.Documento`.
+- **La llaman:** Cargador.DevolverIntentoSinFallarAsync.
+- **Desde:** fase-9-local.
+- **Cambió en:** nada todavía.
+
+### Documentos.MarcarListoAsync(procesado, detalle, ct)
+
+- **Qué hace:** marca `listo` un documento, solo si sigue siendo el mismo PDF que se procesó: tiene que seguir `pendiente` y con la misma huella con que se empezó. En un importado la huella es `NULL` en los dos lados. Si mientras tanto lo reemplazaron o lo borraron, no marca nada: así no queda listo con el contenido viejo. Al marcar anota la hora en `FechaProceso` y deja los intentos en 0.
+- **Recibe:** el documento como se lo leyó al empezar, el detalle (que puede ser `null`, y se recorta a 1.000 caracteres) y el token de cancelación.
+- **Devuelve:** `true` si lo marcó; `false` si cambió o se borró.
+- **Efectos:** actualiza una fila de `rag.Documento`.
+- **La llaman:** Cargador.ProcesarAsync.
+- **Desde:** fase-9-local.
+- **Cambió en:** nada todavía.
+
 ### Documentos.MarcarAsync(documentoId, estado, detalle, ct)
 
-- **Qué hace:** guarda el estado de un documento y el motivo, si hay, recortado a 1.000 caracteres. Cuando deja de estar pendiente anota la hora en `FechaProceso`: con eso se calcula la velocidad de la carga.
+- **Qué hace:** guarda el estado de un documento y el motivo, si hay, recortado a 1.000 caracteres, y deja los intentos en 0. Cuando deja de estar pendiente anota la hora en `FechaProceso`: con eso se calcula la velocidad de la carga. El `Cargador` la usa para `error` y `sin texto`; para `listo` usa Documentos.MarcarListoAsync.
 - **Recibe:** el número del documento, el estado, el detalle (que puede ser `null`) y el token de cancelación.
 - **Devuelve:** nada.
 - **Efectos:** actualiza una fila de `rag.Documento`.
@@ -494,7 +567,7 @@ RAG-BASICO\
 
 - **Qué hace:** cuenta los documentos por estado y los fragmentos; calcula la velocidad, que son los documentos procesados en los últimos 10 minutos dividido 10; estima lo que falta con Documentos.EstimarFalta; y trae una página de 50 documentos, el más nuevo primero, de todos o de un solo estado.
 - **Recibe:** el estado para filtrar, o `null` para todos; el número de página, desde 1; y el token de cancelación.
-- **Devuelve:** un `ResumenDocumentos`.
+- **Devuelve:** un `ResumenDocumentos`, con el aviso vacío: lo completa el endpoint.
 - **Efectos:** lee `rag.Documento` y `rag.Fragmento`.
 - **La llaman:** el endpoint `GET /documentos`.
 - **Desde:** fase-9-local.
@@ -512,7 +585,7 @@ RAG-BASICO\
 
 ### Documentos.ReintentarAsync(ct)
 
-- **Qué hace:** pasa a `pendiente` los documentos que quedaron en `error`, para que se procesen de nuevo. Los que quedaron `sin texto` no: van a dar lo mismo.
+- **Qué hace:** pasa a `pendiente` los documentos que quedaron en `error`, con los intentos en 0, para que se procesen de nuevo. Los que quedaron `sin texto` no: van a dar lo mismo.
 - **Recibe:** el token de cancelación.
 - **Devuelve:** cuántos documentos pasó a pendiente.
 - **Efectos:** actualiza filas de `rag.Documento`.
@@ -522,11 +595,25 @@ RAG-BASICO\
 
 ### Documentos.ReprocesarTodoAsync(ct)
 
-- **Qué hace:** rehace todo desde los PDF: borra la colección de Qdrant, si existe, y todos los fragmentos, y deja todos los documentos en `pendiente`. Espera el turno (`Documentos.Turno`). Le da hasta 10 minutos a cada comando de SQL, porque con muchos fragmentos el borrado tarda. Sirve cuando cambia la forma de cortar, o cuando Qdrant y la base no coinciden.
+- **Qué hace:** rehace todo desde los PDF, en este orden.
+  1. Deja todos los documentos en `pendiente`, con los intentos en 0. Desde acá ninguno aparece en las búsquedas, y si lo que sigue se corta, lo rehace el `Cargador`, que borra lo viejo de cada documento antes de procesarlo.
+  2. Borra todos los fragmentos, de a 20.000: un solo borrado de un millón de filas tarda demasiado y traba la tabla.
+  3. Borra la colección de Qdrant, si existe.
+  - Espera el turno (`Documentos.Turno`) y le da hasta 10 minutos a cada comando de SQL. Sirve cuando cambia la forma de cortar, o cuando Qdrant y la base no coinciden.
 - **Recibe:** el token de cancelación.
 - **Devuelve:** cuántos documentos quedaron pendientes.
-- **Efectos:** borra la colección de Qdrant, borra todas las filas de `rag.Fragmento` y actualiza todas las de `rag.Documento`.
+- **Efectos:** actualiza todas las filas de `rag.Documento`, borra todas las de `rag.Fragmento` y borra la colección de Qdrant.
 - **La llaman:** el endpoint `POST /documentos/reprocesar`.
+- **Desde:** fase-9-local.
+- **Cambió en:** nada todavía.
+
+### Documentos.ErrorDeOrigen(error)
+
+- **Qué hace:** convierte un error de la base de origen en un `ErrorDeServicio` de `SQL de origen`, que dice qué servidor y qué base son (Salud.Describir) y qué revisar. Si se venció el tiempo (el número -2 de SQL Server), el código es 502: puede ser pasajero o puede ser ese PDF, así que el `Cargador` lo reintenta contando el intento. Si no se pudo conectar o la consulta está mal, el código es 503: es del servidor, y la carga se frena hasta que vuelva.
+- **Recibe:** el `SqlException`.
+- **Devuelve:** el `ErrorDeServicio`, para que quien llama lo lance.
+- **Efectos:** ninguno.
+- **La llaman:** Documentos.AnotarOrigenAsync y Documentos.LeerContenidoAsync.
 - **Desde:** fase-9-local.
 - **Cambió en:** nada todavía.
 
@@ -563,23 +650,23 @@ RAG-BASICO\
 ## RagBasico.Api\ErrorDeServicio.cs
 
 - **Responsabilidad:** un tipo de error propio para Ollama, Qdrant y la base de origen, con el nombre del servicio y el código HTTP que le corresponde, así el manejador de errores puede decir qué falló.
-- **Contiene:** la clase `ErrorDeServicio`, con las propiedades `Servicio` (`Ollama`, `Qdrant` o `SQL de origen`) y `CodigoHttp` (503 si no responde, 502 si respondió con un error, 400 si falta configurarlo).
+- **Contiene:** la clase `ErrorDeServicio`, con las propiedades `Servicio` (`Ollama`, `Qdrant` o `SQL de origen`) y `CodigoHttp` (503 si no responde, 504 si no respondió a tiempo, 502 si respondió con un error, 400 si falta configurarlo) y `DeConfiguracion`, que dice si el error es de cómo está configurado el servicio y no de lo que se le mandó: reintentar no lo arregla.
 - **Desde:** fase-8-validaciones.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-9-local (la propiedad `DeConfiguracion`).
 
 ### Clase ErrorDeServicio
 
-- **Responsabilidad:** heredar de `Exception` y sumarle el servicio y el código HTTP.
-- **Recibe en el constructor:** el servicio, el código HTTP, el mensaje y, si hay, el error original, que queda en `InnerException`.
-- **La registra:** nadie. La lanzan DetectorDeCaidas.SendAsync, Ollama.VerificarAsync, Qdrant.VerificarAsync, Documentos.AnotarOrigenAsync y Documentos.LeerContenidoAsync. La reconocen ManejadorDeErrores.Describir, para el código HTTP, y Errores.EsCaida, para saber si el servicio no responde.
+- **Responsabilidad:** heredar de `Exception` y sumarle el servicio, el código HTTP y si es de configuración.
+- **Recibe en el constructor:** el servicio, el código HTTP, el mensaje y, si hay, el error original, que queda en `InnerException`. `DeConfiguracion` no va en el constructor: quien lanza el error la pone entre llaves, `new ErrorDeServicio(...) { DeConfiguracion = true }`.
+- **La registra:** nadie. La lanzan DetectorDeCaidas.SendAsync, Ollama.VerificarAsync, Ollama.EmbeddingsAsync, Qdrant.VerificarAsync, Documentos.AnotarOrigenAsync y Documentos.LeerContenidoAsync. La reconocen ManejadorDeErrores.Describir, para el código HTTP, Errores.EsCaida, para saber si el servicio no responde, y Cargador.EsDeUnServidor, para saber si el error es del servidor o del documento.
 - **Desde:** fase-8-validaciones.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-9-local (la propiedad `DeConfiguracion`).
 
 ## RagBasico.Api\Errores.cs
 
 - **Responsabilidad:** las reglas sobre los errores que comparten varias piezas.
 - **Desde:** fase-7-qdrant.
-- **Cambió en:** fase-8-validaciones.
+- **Cambió en:** fase-8-validaciones, fase-9-local.
 
 ### Clase Errores
 
@@ -591,13 +678,13 @@ RAG-BASICO\
 
 ### Errores.EsCaida(error)
 
-- **Qué hace:** dice si un error muestra que un servicio, Ollama o Qdrant, no responde: no se pudo conectar o no contestó a tiempo (un `TaskCanceledException` con un `TimeoutException` adentro). El `DetectorDeCaidas` convierte el error de conexión en un `ErrorDeServicio` con código 503, que cuenta como caída; uno con 502, que es el servicio contestando un error, no. Un error que el servicio sí contestó, como un texto que Ollama no acepta o una colección que no existe en Qdrant, no es una caída.
+- **Qué hace:** dice si un error muestra que un servicio no responde: no se pudo conectar o no contestó a tiempo. El `DetectorDeCaidas` convierte el error de conexión en un `ErrorDeServicio` con código 503 y el de tiempo vencido en uno con 504: los dos cuentan como caída. Uno con 502, que es el servicio contestando un error, no. También cuentan un `HttpRequestException` suelto y un `TaskCanceledException` con un `TimeoutException` adentro. Un error que el servicio sí contestó, como un texto que Ollama no acepta o una colección que no existe en Qdrant, no es una caída.
 - **Recibe:** el error.
 - **Devuelve:** `true` si el servicio no responde.
 - **Efectos:** ninguno.
 - **La llaman:** Cargador.EsDeUnServidor.
 - **Desde:** fase-7-qdrant.
-- **Cambió en:** fase-8-validaciones (reconoce el `ErrorDeServicio`).
+- **Cambió en:** fase-8-validaciones (reconoce el `ErrorDeServicio`), fase-9-local (cuenta también el 504).
 
 ## RagBasico.Api\ManejadorDeErrores.cs
 
@@ -626,7 +713,7 @@ RAG-BASICO\
 ### ManejadorDeErrores.Describir(error)
 
 - **Qué hace:** traduce un error a un problema:
-  - `ErrorDeServicio`: el código que trae el error. Con 503, el título es "Ollama no responde" o "Qdrant no responde"; con otro código, "respondió con un error".
+  - `ErrorDeServicio`: el código que trae el error, con el nombre del servicio en el título. Con 503, "Ollama no responde"; con 504, "Ollama no respondió a tiempo"; con otro código, "Ollama respondió con un error". Lo mismo con Qdrant y con la base de origen.
   - `SqlException`: 503 "SQL Server no responde o devolvió un error", con qué revisar.
   - Tiempo de espera vencido (`TaskCanceledException` con un `TimeoutException` adentro): 504 "Un servicio tardó demasiado".
   - `BadHttpRequestException`, el error de ASP.NET Core cuando no puede leer el pedido (un JSON roto, un parámetro que falta): su propio código, 400, con "El pedido no es válido". Si el código es 413, porque la subida pasa del tope de `Rag:MegasPorSubida`, el título es "La subida es demasiado grande" y el detalle dice de subir menos archivos por vez.
@@ -636,7 +723,7 @@ RAG-BASICO\
 - **Efectos:** ninguno.
 - **La llaman:** ManejadorDeErrores.TryHandleAsync.
 - **Desde:** fase-8-validaciones.
-- **Cambió en:** fase-9-local (el 413 de una subida demasiado grande).
+- **Cambió en:** fase-9-local (el 413 de una subida demasiado grande, y el título del 504).
 
 ### ManejadorDeErrores.Problema(codigo, titulo, detalle)
 
@@ -686,6 +773,8 @@ RAG-BASICO\
 | `Pendiente` | `DocumentoId` | `int` | El número del documento en `rag.Documento` |
 | `Pendiente` | `Archivo` | `string` | El nombre del PDF |
 | `Pendiente` | `OrigenId` | `string?` | Su número en la base de origen; `null` si se arrastró a la página |
+| `Pendiente` | `Huella` | `byte[]?` | La huella del PDF que se va a procesar; `null` en un importado. Sirve para saber, al terminar, si sigue siendo el mismo PDF |
+| `Pendiente` | `Intentos` | `int` | Cuántas veces se empezó a procesar sin terminar |
 | `DocumentoFila` | `DocumentoId`, `Archivo`, `OrigenId` | `int`, `string`, `string?` | El documento, como en `Pendiente` |
 | `DocumentoFila` | `Estado`, `Detalle` | `string`, `string?` | El estado (`pendiente`, `listo`, `sin texto` o `error`) y el motivo, si falló o si el texto salió dudoso |
 | `DocumentoFila` | `Fragmentos` | `int` | Cuántos fragmentos tiene |
@@ -695,6 +784,7 @@ RAG-BASICO\
 | `ResumenDocumentos` | `DocumentosPorMinuto` | `double` | La velocidad de la carga en los últimos 10 minutos |
 | `ResumenDocumentos` | `TiempoQueFalta` | `string` | Lo que falta, en palabras; vacío si no hay pendientes |
 | `ResumenDocumentos` | `Pagina` | `List<DocumentoFila>` | Una página de 50 documentos de la lista |
+| `ResumenDocumentos` | `Aviso` | `string` | Por qué está frenada la carga, si un servidor no responde; vacío si anda |
 
 ## RagBasico.Api\Ollama.cs
 
@@ -706,7 +796,7 @@ RAG-BASICO\
 ### Clase Ollama
 
 - **Responsabilidad:** ser el único lugar del código que conoce el formato de la API de Ollama.
-- **Recibe en el constructor:** el `HttpClient` que arma Program.cs, con la dirección (`Conexiones:Ollama`) y el tiempo de espera (`Ollama:SegundosDeEspera`), y la configuración, de donde lee `Conexiones:ModeloChat`, `Conexiones:ModeloEmbeddings`, `Ollama:InstruccionPregunta` y `Ollama:MantenerCargado`.
+- **Recibe en el constructor:** el `HttpClient` que arma Program.cs, con la dirección (`Conexiones:Ollama`) y un tiempo de espera de respaldo (`Ollama:SegundosDeEspera` más 10 segundos; el reloj de verdad lo lleva el `DetectorDeCaidas`), y la configuración, de donde lee `Conexiones:ModeloChat`, `Conexiones:ModeloEmbeddings`, `Ollama:InstruccionPregunta` y `Ollama:MantenerCargado`.
 - **La registra:** Program.cs, con `AddHttpClient<Ollama>`, que crea un cliente tipado nuevo en cada pedido.
 - **Desde:** fase-1-ollama.
 - **Cambió en:** fase-5-vectores (los embeddings), fase-7-qdrant (la lista de modelos y el calentamiento), fase-9-local (lee los nombres de los dos modelos del bloque `Conexiones`).
@@ -723,13 +813,13 @@ RAG-BASICO\
 
 ### Ollama.EmbeddingsAsync(textos, ct)
 
-- **Qué hace:** calcula el vector de cada texto con el modelo de embeddings, todos en un solo pedido a `/api/embed`. Los fragmentos se mandan así, sin instrucción, como dice la ficha del modelo. Controla que vuelva un vector por texto y que cada uno tenga 1024 números; si no, lanza un error que lo dice.
+- **Qué hace:** calcula el vector de cada texto con el modelo de embeddings, todos en un solo pedido a `/api/embed`. Los fragmentos se mandan así, sin instrucción, como dice la ficha del modelo. Controla que vuelva un vector por texto y que cada uno tenga 1024 números; si no, lanza un error que lo dice. El de los 1024 números es un `ErrorDeServicio` de configuración: el modelo de `Conexiones:ModeloEmbeddings` es otro, y falla con cualquier texto.
 - **Recibe:** la lista de textos y el token de cancelación.
 - **Devuelve:** un vector (`float[]` de 1024 números) por texto, en el mismo orden.
 - **Efectos:** un `POST /api/embed` a Ollama.
 - **La llaman:** Ollama.EmbeddingPreguntaAsync, Ollama.CalentarAsync, Cargador.ProcesarAsync y Salud.RevisarDimensionAsync.
 - **Desde:** fase-5-vectores.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-9-local (el modelo de otra dimensión es un `ErrorDeServicio` de configuración en lugar de un `InvalidOperationException`).
 
 ### Ollama.EmbeddingPreguntaAsync(pregunta, ct)
 
@@ -765,11 +855,11 @@ RAG-BASICO\
 
 - **Qué hace:** si Ollama contestó con un error, lanza una excepción con su mensaje real, por ejemplo "model not found", en lugar de un error genérico.
 - **Recibe:** la respuesta HTTP de Ollama y el token de cancelación.
-- **Devuelve:** nada. Si la respuesta es un error, lanza un `ErrorDeServicio` de Ollama con código 502.
+- **Devuelve:** nada. Si la respuesta es un error, lanza un `ErrorDeServicio` de Ollama con código 502. Si Ollama contestó 404, 401 o 403, el error queda marcado como de configuración (`DeConfiguracion`): el modelo no está bajado, o Ollama no deja entrar, y eso pasa con cualquier pedido.
 - **Efectos:** lee el cuerpo de la respuesta cuando es un error.
 - **La llaman:** Ollama.ChatAsync, Ollama.EmbeddingsAsync y Ollama.ListarModelosAsync.
 - **Desde:** fase-1-ollama.
-- **Cambió en:** fase-8-validaciones (lanza un `ErrorDeServicio` en lugar de un `InvalidOperationException`).
+- **Cambió en:** fase-8-validaciones (lanza un `ErrorDeServicio` en lugar de un `InvalidOperationException`), fase-9-local (marca los errores de configuración).
 
 ### Ollama.NanosAMilisegundos(nanosegundos)
 
@@ -784,7 +874,7 @@ RAG-BASICO\
 ## RagBasico.Api\Procesador.cs
 
 - **Responsabilidad:** el trabajo en segundo plano: arranca con la API y da vueltas procesando de a un documento pendiente. Si se apaga la API, al volver sigue donde quedó, porque el estado de cada documento está en la base.
-- **Contiene:** la clase `Procesador` y sus dos esperas privadas: `EsperaSinTrabajo` (5 segundos) y `EsperaConError` (30 segundos).
+- **Contiene:** la clase `Procesador`; sus dos esperas privadas, `EsperaSinTrabajo` (5 segundos) y `EsperaConError` (30 segundos); y la propiedad estática `Aviso`, que dice por qué está frenada la carga, o vacío si anda. Es estática porque hay un solo `Procesador` y la tiene que leer un endpoint, que no lo recibe.
 - **Desde:** fase-9-local.
 - **Cambió en:** nada todavía.
 
@@ -798,10 +888,10 @@ RAG-BASICO\
 
 ### Procesador.ExecuteAsync(apagado)
 
-- **Qué hace:** el bucle. En cada vuelta pide un `Cargador` y llama a Cargador.ProcesarSiguienteAsync. Si procesó un documento, sigue enseguida con el próximo. Si no había ninguno, espera 5 segundos. Si un servidor no responde, lo anota en el log una sola vez, no cada 30 segundos, y espera 30 segundos antes de reintentar. Termina cuando se apaga la API.
+- **Qué hace:** el bucle. En cada vuelta pide un `Cargador` y llama a Cargador.ProcesarSiguienteAsync. Si procesó un documento, sigue enseguida con el próximo. Si no había ninguno, espera 5 segundos. Si el `Cargador` lanza un error, porque un servidor no responde o porque el error puede ser pasajero, lo anota en el log una sola vez, no cada 30 segundos, deja el motivo en `Aviso` y espera 30 segundos antes de reintentar. Cuando una vuelta termina bien, vacía el `Aviso`. Termina cuando se apaga la API.
 - **Recibe:** el token de cancelación, que se dispara cuando se apaga la API.
 - **Devuelve:** nada.
-- **Efectos:** los de Cargador.ProcesarSiguienteAsync, y escribe en el log.
+- **Efectos:** los de Cargador.ProcesarSiguienteAsync; escribe en el log y cambia `Aviso`.
 - **La llaman:** ASP.NET Core, una sola vez, cuando arranca la API.
 - **Desde:** fase-9-local.
 - **Cambió en:** nada todavía.
@@ -809,12 +899,13 @@ RAG-BASICO\
 ## RagBasico.Api\Program.cs
 
 - **Responsabilidad:** el punto de entrada de la API: arma la aplicación, registra los servicios, pone el tope de las subidas, carga los modelos, atiende los errores, sirve las páginas, declara los endpoints y la deja escuchando.
-- **Contiene:** instrucciones de nivel superior, sin clase: el compilador arma solo el método `Main`. Se lee en ocho bloques:
+- **Contiene:** instrucciones de nivel superior, sin clase: el compilador arma solo el método `Main`. Se lee en nueve bloques:
   - **Armado:** `WebApplication.CreateBuilder(args)` lee `appsettings.json`, las variables de entorno y los argumentos. Después `AddJsonFile("conexiones.json", optional: true, ...)` suma el archivo de las conexiones de la oficina, si existe al lado de `appsettings.json`: sus líneas pisan a las de `appsettings.json`. Git lo ignora, así los nombres de los servidores y las claves no se suben.
-  - **Servicios:** `AddHttpClient<Ollama>` registra el cliente de Ollama con `Conexiones:Ollama` y `Ollama:SegundosDeEspera`, y `AddHttpClient<Qdrant>` el de Qdrant, que se prepara con Qdrant.Configurar. Delante de cada cliente, `AddHttpMessageHandler` pone un `DetectorDeCaidas`, que dice qué servicio no responde. `AddScoped` registra `Documentos`, el `Cargador`, el `Buscador`, el `Redactor` y la `Salud`: un objeto nuevo de cada uno por pedido. Cuando un endpoint o un constructor pide uno, ASP.NET Core se lo crea: eso es la inyección de dependencias. `AddHostedService<Procesador>` registra el trabajo en segundo plano, que arranca con la API. `AddProblemDetails` y `AddExceptionHandler<ManejadorDeErrores>` hacen que los errores salgan como ProblemDetails, y `RouteHandlerOptions.ThrowOnBadRequest` hace que un pedido que no se puede leer, como un JSON roto, llegue al manejador con su motivo en cualquier entorno, no solo en Development.
+  - **Servicios:** `AddHttpClient<Ollama>` registra el cliente de Ollama con `Conexiones:Ollama`, y `AddHttpClient<Qdrant>` el de Qdrant, que se prepara con Qdrant.Configurar. Delante de cada cliente, `AddHttpMessageHandler` pone un `DetectorDeCaidas`, que dice qué servicio no responde. El tiempo de espera de cada servicio (`Ollama:SegundosDeEspera` y `Qdrant:SegundosDeEspera`) se le pasa al `DetectorDeCaidas`, que lleva el reloj: así, si se vence, el error dice qué servicio fue. El tiempo del `HttpClient` queda 10 segundos más largo, solo de respaldo. `AddScoped` registra `Documentos`, el `Cargador`, el `Buscador`, el `Redactor` y la `Salud`: un objeto nuevo de cada uno por pedido. Cuando un endpoint o un constructor pide uno, ASP.NET Core se lo crea: eso es la inyección de dependencias. `AddHostedService<Procesador>` registra el trabajo en segundo plano, que arranca con la API. `AddProblemDetails` y `AddExceptionHandler<ManejadorDeErrores>` hacen que los errores salgan como ProblemDetails, y `RouteHandlerOptions.ThrowOnBadRequest` hace que un pedido que no se puede leer, como un JSON roto, llegue al manejador con su motivo en cualquier entorno, no solo en Development.
   - **Tope de subida:** `Rag:MegasPorSubida` (200) va en los dos lugares donde ASP.NET Core corta por tamaño: el servidor (`ConfigureKestrel`, `MaxRequestBodySize`) y la lectura del formulario (`FormOptions`, `MultipartBodyLengthLimit`).
   - **Calentamiento:** cuando la API ya está escuchando (`ApplicationStarted`), carga los dos modelos en Ollama en segundo plano con Ollama.CalentarAsync, así la primera pregunta no tarda 30 segundos. `Task.Run` lo corre sin hacer esperar el arranque; si falla, queda en el log.
   - **Errores:** `UseExceptionHandler` va primero en el camino de cada pedido: si algo lanza un error que nadie atrapó, lo atiende el `ManejadorDeErrores`. `UseStatusCodePages` le pone un cuerpo ProblemDetails a las respuestas de error que salen vacías, como un 404 (una ruta que no existe), un 405 (un método que no corresponde) o un 415 (un cuerpo que no es JSON).
+  - **Origen:** un paso propio, declarado con `app.Use`, por el que pasan todos los pedidos antes de llegar a las páginas y a los endpoints. A los que cambian algo (`POST`, `DELETE`) les mira el encabezado `Origin`, donde el navegador manda la dirección de la página que hace el pedido: si no es la de la propia API, responde 403 y no sigue. Así una página cualquiera de internet, abierta en esta PC, no puede subir, borrar ni reprocesar documentos. Un pedido sin `Origin`, como los de `RagBasico.Api.http`, no viene de una página y pasa. Se completa con `AllowedHosts` en `appsettings.json`, que rechaza los pedidos que no vienen dirigidos a `127.0.0.1` o a `localhost`.
   - **Páginas:** `UseDefaultFiles` hace que la raíz, `/`, devuelva `wwwroot\index.html`, y `UseStaticFiles` sirve los archivos de `wwwroot`. Por eso la información del proyecto está en `/info`.
   - **Endpoints:** cada `app.MapGet(...)`, `app.MapPost(...)` o `app.MapDelete(...)` asocia una ruta con la función que la atiende. `GET /buscar` y `POST /preguntar` controlan la pregunta con Validador.RevisarPregunta (con el máximo de `Rag:LargoMaximoPregunta`) y el modo con Buscador.ElegirModo; si algo no sirve, devuelven `Results.Problem` con código 400 y el motivo.
   - **Arranque:** `app.Run()` deja la API escuchando en la dirección de `launchSettings.json` hasta que se la frena con Ctrl+C.
@@ -849,8 +940,8 @@ RAG-BASICO\
 ### GET /documentos
 
 - **Recibe:** si se quiere, `estado` (`pendiente`, `listo`, `sin texto` o `error`) y `pagina` en la dirección. Por ejemplo: `/documentos?estado=error&pagina=2`. Sin `estado`, todos; sin `pagina`, la primera.
-- **Devuelve:** el `ResumenDocumentos`: cuántos documentos hay en cada estado, cuántos fragmentos, la velocidad de la carga, lo que falta y una página de 50 documentos. Con un estado que no existe, un error 400 que lista los estados.
-- **La atiende:** una función de `Program.cs` que controla el estado contra `Documentos.Estados` y llama a Documentos.ResumirAsync.
+- **Devuelve:** el `ResumenDocumentos`: cuántos documentos hay en cada estado, cuántos fragmentos, la velocidad de la carga, lo que falta, una página de 50 documentos y, si la carga está frenada, el aviso que dice por qué. Con un estado que no existe, un error 400 que lista los estados.
+- **La atiende:** una función de `Program.cs` que controla el estado contra `Documentos.Estados`, llama a Documentos.ResumirAsync y le pone el aviso de `Procesador.Aviso` con `with`, que copia el record cambiando solo ese campo.
 - **Desde:** fase-9-local.
 - **Cambió en:** nada todavía.
 
@@ -927,7 +1018,7 @@ RAG-BASICO\
 
 ### Qdrant.Configurar(cliente, config)
 
-- **Qué hace:** prepara el `HttpClient` de Qdrant: la dirección (`Conexiones:Qdrant`), el tiempo de espera (`Qdrant:SegundosDeEspera`) y, si `Conexiones:ClaveQdrant` trae una clave, el encabezado `api-key` en todos los pedidos. Un Qdrant de esta PC no lleva clave; uno en un servidor de la oficina, sí.
+- **Qué hace:** prepara el `HttpClient` de Qdrant: la dirección (`Conexiones:Qdrant`), el tiempo de espera de respaldo (`Qdrant:SegundosDeEspera` más 10 segundos; el reloj de verdad lo lleva el `DetectorDeCaidas`) y, si `Conexiones:ClaveQdrant` trae una clave, el encabezado `api-key` en todos los pedidos. Un Qdrant de esta PC no lleva clave; uno en un servidor de la oficina, sí.
 - **Recibe:** el `HttpClient` y la configuración.
 - **Devuelve:** nada. Cambia el cliente que recibe.
 - **Efectos:** ninguno fuera de ese cliente.
@@ -957,13 +1048,13 @@ RAG-BASICO\
 
 ### Qdrant.CrearColeccionAsync(ct)
 
-- **Qué hace:** crea la colección con `PUT /collections/<colección>`: vectores de 1024 números comparados por coseno, y los dos umbrales bajos. `indexing_threshold` en 10 KB hace que el índice HNSW se arme enseguida, y `full_scan_threshold` en 10 KB hace que la búsqueda lo use. Los dos se miden en kilobytes y cada vector ocupa 4 KB: con los valores por defecto, unos 2.500 vectores, Qdrant buscaría recorriendo todos los vectores.
+- **Qué hace:** crea la colección con `PUT /collections/<colección>`: vectores de 1024 números comparados por coseno, y los dos umbrales bajos. `indexing_threshold` en 10 KB hace que el índice HNSW se arme enseguida, y `full_scan_threshold` en 10 KB hace que la búsqueda lo use. Los dos se miden en kilobytes y cada vector ocupa 4 KB: con los valores por defecto, unos 2.500 vectores, Qdrant buscaría recorriendo todos los vectores. Después crea un índice sobre el dato `documentoId`, con `PUT /collections/<colección>/index?wait=true`: sin él, borrar los puntos de un documento recorre toda la colección.
 - **Recibe:** el token de cancelación.
 - **Devuelve:** nada.
-- **Efectos:** crea la colección en Qdrant.
+- **Efectos:** crea la colección en Qdrant, y su índice sobre `documentoId`.
 - **La llaman:** Qdrant.AsegurarColeccionAsync.
 - **Desde:** fase-7-qdrant.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-9-local (el índice sobre `documentoId`).
 
 ### Qdrant.AsegurarColeccionAsync(ct)
 
@@ -1011,7 +1102,7 @@ RAG-BASICO\
 - **Recibe:** el número del documento y el token de cancelación.
 - **Devuelve:** nada.
 - **Efectos:** borra puntos de la colección.
-- **La llaman:** Cargador.ProcesarAsync y Documentos.BorrarAsync.
+- **La llaman:** Cargador.ProcesarAsync, Cargador.BorrarVectoresSinFallarAsync y Documentos.BorrarAsync.
 - **Desde:** fase-9-local. Reemplaza a `BorrarPuntosAsync`, que borraba por número de fragmento.
 - **Cambió en:** nada todavía.
 
@@ -1179,13 +1270,13 @@ RAG-BASICO\
 
 ### Salud.RevisarAsync(ct)
 
-- **Qué hace:** corre los chequeos y arma el estado general: `error` si falla algo sin lo que no se puede preguntar, `aviso` si algo anda a medias, y `ok` si anda todo. El chequeo de la base de origen corre solo si `Conexiones:SqlOrigen` tiene algo.
+- **Qué hace:** corre los chequeos, todos a la vez con `Task.WhenAll`: con un servidor caído se espera lo que tarda el más lento y no la suma. Arma el estado general: `error` si falla algo sin lo que no se puede preguntar, `aviso` si algo anda a medias, y `ok` si anda todo. El chequeo de la base de origen corre solo si `Conexiones:SqlOrigen` tiene algo.
 - **Recibe:** el token de cancelación.
 - **Devuelve:** un `InformeSalud`.
 - **Efectos:** los de cada chequeo: lee SQL Server y hace pedidos a Ollama y a Qdrant.
 - **La llaman:** el endpoint `GET /salud`.
 - **Desde:** fase-7-qdrant.
-- **Cambió en:** fase-9-local (el chequeo de la base de origen).
+- **Cambió en:** fase-9-local (el chequeo de la base de origen, y los chequeos corren a la vez).
 
 ### Salud.Describir(conexion)
 
@@ -1193,7 +1284,7 @@ RAG-BASICO\
 - **Recibe:** la cadena de conexión.
 - **Devuelve:** un texto como `servidor localhost\SQLEXPRESS, base RagBasico_F9`.
 - **Efectos:** ninguno.
-- **La llaman:** Salud.RevisarSqlAsync y Salud.RevisarOrigenAsync.
+- **La llaman:** Salud.RevisarSqlAsync, Salud.RevisarOrigenAsync y Documentos.ErrorDeOrigen.
 - **Desde:** fase-9-local.
 - **Cambió en:** nada todavía.
 
@@ -1239,9 +1330,10 @@ RAG-BASICO\
 
 ### Salud.RevisarQdrantAsync(ct)
 
-- **Qué hace:** controla que Qdrant responda y que tenga un punto por cada fragmento de los documentos listos.
-  - Si no responde, es un `error`: sin Qdrant no hay búsqueda por significado ni híbrida.
+- **Qué hace:** controla que Qdrant responda, que no tenga puntos de otra carga y que tenga un punto por cada fragmento de los documentos listos.
+  - Si no responde, es un `error`: sin Qdrant no hay búsqueda por significado ni híbrida. El detalle dice qué revisar y, si Qdrant respondió 401 o 403, que falta o está mal `Conexiones:ClaveQdrant`.
   - Si la colección todavía no existe, es un `aviso`: se crea sola al cargar el primer documento.
+  - Si tiene más puntos que fragmentos hay en toda la base, es un `aviso`: como los fragmentos se guardan antes que sus puntos, eso solo pasa si la colección trae puntos de otra base o de otra carga, y la búsqueda por significado devolvería cualquier cosa. Dice de apretar "Reprocesar todo" o de usar otra colección.
   - Si no quedan documentos pendientes y los puntos no coinciden con los fragmentos, es un `aviso` que dice de apretar "Reprocesar todo". Mientras hay pendientes no compara, porque los números se mueven.
   - Si Qdrant responde pero SQL Server no, es un `aviso`: no se pudo comparar.
 - **Recibe:** el token de cancelación.
@@ -1249,7 +1341,7 @@ RAG-BASICO\
 - **Efectos:** pedidos a Qdrant, y lee `rag.Fragmento` y `rag.Documento` por medio de Salud.ContarFragmentosAsync.
 - **La llaman:** Salud.RevisarAsync.
 - **Desde:** fase-7-qdrant.
-- **Cambió en:** fase-9-local (Qdrant apagado es un error y no un aviso, porque ya no hay respaldo en SQL; compara los puntos con los fragmentos; ya no controla la versión).
+- **Cambió en:** fase-9-local (Qdrant apagado es un error y no un aviso, porque ya no hay respaldo en SQL; compara los puntos con los fragmentos y avisa si hay puntos de otra carga; ya no controla la versión).
 
 ### Salud.RevisarOrigenAsync(ct)
 
@@ -1263,9 +1355,9 @@ RAG-BASICO\
 
 ### Salud.ContarFragmentosAsync(ct)
 
-- **Qué hace:** cuenta los fragmentos de los documentos listos y los documentos pendientes.
+- **Qué hace:** cuenta los fragmentos de los documentos listos, todos los fragmentos y los documentos pendientes.
 - **Recibe:** el token de cancelación.
-- **Devuelve:** un `Fragmentos`, con los dos números.
+- **Devuelve:** un `Fragmentos`, con los tres números.
 - **Efectos:** lee `rag.Fragmento` y `rag.Documento`.
 - **La llaman:** Salud.RevisarQdrantAsync.
 - **Desde:** fase-9-local.
@@ -1319,17 +1411,18 @@ RAG-BASICO\
   - sube los PDF que se sueltan en la zona, o que se eligen con un clic, a `POST /documentos`, y muestra el informe: cuántos nuevos, reemplazados, ya cargados y rechazados;
   - prende el botón "Importar de la base de origen" solo si `GET /info` dice que hay una configurada, y entonces llama a `POST /documentos/importar`;
   - muestra los números de `GET /documentos` (listos, pendientes, sin texto, con error y fragmentos), la velocidad y lo que falta, y se actualiza solo: cada 5 segundos si hay pendientes, cada 30 si no;
+  - si la carga está frenada porque un servidor no responde, muestra en rojo el aviso que manda `GET /documentos`, en lugar de la velocidad;
   - lista los documentos de a 50, con un filtro por estado y los botones "Anterior" y "Siguiente"; cada fila tiene el estado, el motivo si falló y un botón "Borrar", que pide confirmación y llama a `DELETE /documentos/{id}`;
   - "Reintentar los que fallaron" llama a `POST /documentos/reintentar`, y "Reprocesar todo", después de confirmar, a `POST /documentos/reprocesar`;
   - muestra el nombre de cada archivo con `textContent` y no con `innerHTML`, así nunca se interpreta como HTML;
-  - muestra el error de la API, con el título y el detalle del ProblemDetails.
+  - muestra el error de la API, con el título y el detalle del ProblemDetails. El error queda a la vista hasta la próxima acción, que puede ser también cambiar el filtro o la página: la actualización automática de la lista pide sin tocarlo. Si no se pudo borrar un documento, el botón "Borrar" vuelve a servir; si no se pudo traer otra página, el número de página no cambia.
 - **Desde:** fase-9-local.
 - **Cambió en:** nada todavía.
 
 ## RagBasico.Api\wwwroot\estado.js
 
 - **Responsabilidad:** la franja de estado que está arriba de las dos páginas: un punto por cada chequeo de `GET /salud`. Verde, anda; amarillo, anda a medias; rojo, no anda. Debajo muestra el detalle de los que no están en verde, que dice qué hacer.
-- **Contiene:** una sola función, `mostrarEstado(elemento)`, que cada página llama una vez con el lugar donde dibujar. Adentro tiene `pedirSalud`, que pide `/salud` ahora y cada 15 segundos, y `dibujarSalud`, que arma los puntos. Lee el informe aunque `/salud` responda 503. Si no puede hablar con la API, dice que se arranca con `iniciar.cmd`. Todo queda adentro de `mostrarEstado`, así sus nombres no chocan con los de la página que la usa.
+- **Contiene:** una sola función, `mostrarEstado(elemento)`, que cada página llama una vez con el lugar donde dibujar. Adentro tiene `pedirSalud`, que pide `/salud` ahora y vuelve a pedirlo 15 segundos después de cada respuesta, así los pedidos no se apilan si `/salud` tarda, y sigue pidiendo aunque una vuelta falle, y `dibujarSalud`, que arma los puntos. Lee el informe aunque `/salud` responda 503. Si no puede hablar con la API, dice que se arranca con `iniciar.cmd`. Todo queda adentro de `mostrarEstado`, así sus nombres no chocan con los de la página que la usa.
 - **Desde:** fase-9-local.
 - **Cambió en:** nada todavía.
 
@@ -1540,6 +1633,7 @@ RAG-BASICO\
   1. Lee la dirección de Qdrant de `Conexiones:Qdrant`, en `RagBasico.Api\appsettings.json`. Si existe `RagBasico.Api\conexiones.json` y trae esa línea, vale la de `conexiones.json`, igual que en la API.
   2. Si Qdrant es de esta PC (`127.0.0.1` o `localhost`) y no responde, lo arranca en otra ventana, minimizada, con `scripts\iniciar-qdrant.ps1`, y lo espera hasta 30 segundos. Si no llega a responder, avisa y sigue: la API arranca igual y la página lo muestra en rojo. Si Qdrant está en otra máquina, no arranca nada.
   3. Corre la API con `dotnet run` desde `RagBasico.Api`, que abre el navegador. Queda en esa ventana hasta Ctrl+C, y sale con el código de `dotnet run`.
+  - Si algo falla antes, como un error de JSON en `appsettings.json` o en `conexiones.json`, o que no esté `dotnet`, muestra el error, que nombra el archivo, y sale con 1: así `iniciar.cmd` deja la ventana abierta para leerlo. Para eso el script empieza con `$ErrorActionPreference = 'Stop'` y termina con un `catch`.
 - **Qué no arranca:** SQL Server, que es un servicio de Windows, ni Ollama, que se abre solo al iniciar sesión. Si alguno falta, la página lo muestra en rojo con lo que hay que hacer.
 - **Funciones:** `Leer-Qdrant`, que lee `Conexiones:Qdrant` de un archivo JSON, y `Probar-Qdrant`, que dice si Qdrant contesta en una dirección.
 - **Desde:** fase-9-local.
@@ -1550,7 +1644,7 @@ RAG-BASICO\
 - **Responsabilidad:** crea toda la base del RAG en un solo script: los documentos con su estado, los fragmentos, el índice Full-Text en español y el registro de consultas. No guarda vectores, que van solo en Qdrant: por eso usa solo SQL que entiende un SQL Server 2014.
 - **Qué crea:** cada paso controla si ya está hecho, así se puede correr de nuevo.
   - La base, si no existe, y el esquema `rag`.
-  - La tabla `rag.Documento`: un registro por PDF, con su estado (`pendiente`, `listo`, `sin texto` o `error`). Un PDF arrastrado guarda sus bytes en `Contenido` y no tiene `OrigenId`; uno importado guarda su número de la base de origen en `OrigenId` y no guarda los bytes.
+  - La tabla `rag.Documento`: un registro por PDF, con su estado (`pendiente`, `listo`, `sin texto` o `error`). Un PDF arrastrado guarda sus bytes en `Contenido` y no tiene `OrigenId`; uno importado guarda su número de la base de origen en `OrigenId` y no guarda los bytes. La columna `Intentos` cuenta cuántas veces se empezó a procesar un documento sin terminar: con 3, queda en `error`, así uno que cuelga el proceso no frena a los demás. Si la base se creó antes de que existiera esa columna, el script la agrega.
   - Tres índices sobre `rag.Documento`: `UX_rag_Documento_Archivo`, para que entre los arrastrados no haya dos con el mismo nombre; `UX_rag_Documento_OrigenId`, para que entre los importados no haya dos con el mismo número; e `IX_rag_Documento_Estado`, para encontrar rápido el próximo pendiente. Los dos primeros son índices filtrados (con `WHERE`), y por eso el script prende `QUOTED_IDENTIFIER`.
   - La tabla `rag.Fragmento`, con borrado en cascada al borrar su documento, y el índice `IX_rag_Fragmento_Documento`.
   - El catálogo `ftRag`, sin distinguir acentos, y el índice Full-Text sobre `rag.Fragmento.Texto`, en español (3082) y con actualización automática.

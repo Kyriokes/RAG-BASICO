@@ -30,8 +30,14 @@ CREATE TABLE rag.Documento (
     Estado        VARCHAR(20) NOT NULL CONSTRAINT DF_rag_Documento_Estado DEFAULT 'pendiente',
     Detalle       NVARCHAR(1000) NULL,
     FechaCarga    DATETIME2 NOT NULL CONSTRAINT DF_rag_Documento_Fecha DEFAULT SYSDATETIME(),
-    FechaProceso  DATETIME2 NULL
+    FechaProceso  DATETIME2 NULL,
+    Intentos      INT NOT NULL CONSTRAINT DF_rag_Documento_Intentos DEFAULT 0
 );
+GO
+-- Cuántas veces se empezó a procesar un documento sin terminar. Con 3, queda en error: así uno que cuelga el proceso no frena a los demás.
+-- Este paso agrega la columna a una base creada antes de que existiera.
+IF COL_LENGTH(N'rag.Documento', N'Intentos') IS NULL
+    ALTER TABLE rag.Documento ADD Intentos INT NOT NULL CONSTRAINT DF_rag_Documento_Intentos DEFAULT 0;
 GO
 -- Entre los arrastrados no puede haber dos con el mismo nombre de archivo.
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_rag_Documento_Archivo')

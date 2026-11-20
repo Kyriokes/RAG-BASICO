@@ -22,6 +22,7 @@
   #numeros div { border: 1px solid var(--borde); border-radius: 8px; padding: 10px 12px; }
   #numeros dt { color: var(--suave); font-size: 0.8rem; }
   #numeros dd { margin: 0; font-size: 1.4rem; font-weight: 600; }
+  .nota.frenada { color: var(--error); overflow-wrap: anywhere; }
   .tabla { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--borde); vertical-align: top; }
@@ -132,8 +133,11 @@
   actualizar();
 
   // --- Pedirle algo a la API. Devuelve los datos, o muestra el error y devuelve null.
-  async function pedir(ruta, opciones) {
-    error.hidden = true;
+  // Con callado en true, que es como pide la actualización automática, no toca el error que esté a la vista:
+  // ni lo esconde al empezar ni lo pisa si falla. Si la API no contesta, ya lo dice la franja de estado.
+  async function pedir(ruta, opciones, callado) {
+    function avisar(texto) { if (!callado) { mostrarError(texto); } }
+    if (!callado) { error.hidden = true; }
     try {
       const pedido = await fetch(ruta, opciones);
       const cuerpo = await pedido.text();
@@ -142,12 +146,12 @@
       if (!pedido.ok) {
         // Los errores vienen como ProblemDetails: el título dice qué pasó y el detalle, qué hacer.
         const motivo = datos && [datos.title, datos.detail].filter(Boolean).join(': ');
-        mostrarError(motivo || ('La API respondió ' + pedido.status + '.'));
+        avisar(motivo || ('La API respondió ' + pedido.status + '.'));
         return null;
       }
       return datos || {};
     } catch (e) {
-      mostrarError('No se pudo conectar con la API: ' + e.message);
+      avisar('No se pudo conectar con la API: ' + e.message);
       return null;
     }
   }
@@ -182,7 +186,7 @@
     const datos = await pedir('/documentos', { method: 'POST', body: formulario });
     if (datos === null) { informe.hidden = true; return; }
     mostrarInforme(datos);
-    actualizar();
+    actualizar(true);
   }
 
   function mostrarInforme(datos) {
@@ -218,21 +222,27 @@
     importar.disabled = false;
     if (datos === null) { informe.hidden = true; return; }
     mostrarInforme(datos);
-    actualizar();
+    actualizar(true);
   });
 
   // --- El avance y la lista. Se actualiza solo: cada 5 segundos si hay pendientes, cada 30 si no.
-  async function actualizar() {
+  // Con callado en true pide sin tocar el error que esté a la vista: así llaman el reloj y las acciones que ya
+  // terminaron. Sin callado, que es como llaman el filtro y los botones de página, muestra su propio error.
+  // Devuelve true si pudo traer la lista.
+  async function actualizar(callado) {
     clearTimeout(reloj);
     let ruta = '/documentos?pagina=' + pagina;
     if (filtro.value) { ruta += '&estado=' + encodeURIComponent(filtro.value); }
-    const datos = await pedir(ruta);
+    const datos = await pedir(ruta, undefined, callado);
     let espera = 30000;
     if (datos !== null) {
       dibujar(datos);
       if (datos.pendientes > 0) { espera = 5000; }
     }
-    reloj = setTimeout(actualizar, espera);
+    // Si mientras se esperaba la respuesta se pidió otra actualización, el reloj es el de esa: no se arman dos.
+    clearTimeout(reloj);
+    reloj = setTimeout(function () { actualizar(true); }, espera);
+    return datos !== null;
   }
 
   function dibujar(datos) {
@@ -242,10 +252,16 @@
     document.getElementById('nError').textContent = datos.conError;
     document.getElementById('nFragmentos').textContent = datos.fragmentos;
 
-    if (datos.pendientes > 0) {
+    if (datos.aviso) {
+      // La carga está frenada porque un servidor no responde: la API dice cuál y que reintenta sola.
+      avance.textContent = datos.aviso;
+      avance.className = 'nota frenada';
+    } else if (datos.pendientes > 0) {
+      avance.className = 'nota';
       const velocidad = datos.documentosPorMinuto.toLocaleString('es-AR', { maximumFractionDigits: 1 });
       avance.textContent = 'Procesando: ' + velocidad + ' documentos por minuto en los últimos 10 minutos. Falta: ' + datos.tiempoQueFalta + '.';
     } else {
+      avance.className = 'nota';
       avance.textContent = 'No hay documentos pendientes.';
     }
 
@@ -297,8 +313,10 @@
     borrar.addEventListener('click', async function () {
       if (!confirm('¿Borrar ' + documento.archivo + '? Se borran sus fragmentos y sus vectores.')) { return; }
       borrar.disabled = true;
-      await pedir('/documentos/' + documento.documentoId, { method: 'DELETE' });
-      actualizar();
+      const datos = await pedir('/documentos/' + documento.documentoId, { method: 'DELETE' });
+      // Si no se pudo borrar, el error queda a la vista y el botón vuelve a servir.
+      if (datos === null) { borrar.disabled = false; }
+      actualizar(true);
     });
     acciones.appendChild(borrar);
     fila.appendChild(acciones);
@@ -307,15 +325,20 @@
   }
 
   filtro.addEventListener('change', function () { pagina = 1; actualizar(); });
-  anterior.addEventListener('click', function () { if (pagina > 1) { pagina--; actualizar(); } });
-  siguiente.addEventListener('click', function () { pagina++; actualizar(); });
+  // Si no se pudo traer la otra página, el número vuelve al de la que está a la vista.
+  async function cambiarPagina(paso) {
+    pagina += paso;
+    if (!await actualizar()) { pagina -= paso; }
+  }
+  anterior.addEventListener('click', function () { if (pagina > 1) { cambiarPagina(-1); } });
+  siguiente.addEventListener('click', function () { cambiarPagina(1); });
 
   document.getElementById('reintentar').addEventListener('click', async function () {
     const datos = await pedir('/documentos/reintentar', { method: 'POST' });
     if (datos !== null) {
       informe.textContent = datos.cuantos + ' documentos vuelven a pendientes.';
       informe.hidden = false;
-      actualizar();
+      actualizar(true);
     }
   });
 
@@ -325,7 +348,7 @@
     if (datos !== null) {
       informe.textContent = datos.cuantos + ' documentos quedaron pendientes para procesar de nuevo.';
       informe.hidden = false;
-      actualizar();
+      actualizar(true);
     }
   });
 </script>

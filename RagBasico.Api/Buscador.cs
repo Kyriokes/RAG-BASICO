@@ -76,11 +76,12 @@ public sealed class Buscador
             return new List<Fragmento>();
         }
         // FREETEXTTABLE corta la pregunta en palabras, busca también sus plurales y conjugaciones,
-        // y devuelve cada fragmento con un puntaje (RANK). Se piden los 50 mejores y se usan los topK primeros.
-        // Solo cuentan los documentos listos: uno a medio procesar todavía no tiene sus vectores.
+        // y devuelve cada fragmento con un puntaje (RANK). Se piden los 200 mejores y se usan los topK primeros.
+        // Solo cuentan los documentos listos: uno a medio procesar todavía no tiene sus vectores. Por eso se piden
+        // 200 y no menos: si los primeros son de un documento a medio procesar, igual quedan para elegir.
         const string sql = @"
 SELECT TOP (@topK) f.FragmentoId, d.Archivo, f.Texto
-FROM FREETEXTTABLE(rag.Fragmento, Texto, @pregunta, LANGUAGE 3082, 50) AS ft
+FROM FREETEXTTABLE(rag.Fragmento, Texto, @pregunta, LANGUAGE 3082, 200) AS ft
 JOIN rag.Fragmento AS f ON f.FragmentoId = ft.[KEY]
 JOIN rag.Documento AS d ON d.DocumentoId = f.DocumentoId
 WHERE d.Estado = 'listo'

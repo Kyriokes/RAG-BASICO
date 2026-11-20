@@ -17,8 +17,14 @@ public sealed class Documentos
     /// <summary>El turno para tocar los fragmentos y los vectores de un documento. Lo toma el Cargador mientras procesa uno, y también borrar y reprocesar: así no se pisan.</summary>
     public static readonly SemaphoreSlim Turno = new SemaphoreSlim(1, 1);
 
+    /// <summary>Cuántas veces se intenta procesar un documento antes de dejarlo en error.</summary>
+    public const int IntentosMaximos = 3;
+
     // Cuántos documentos trae cada página de la lista.
     private const int PorPagina = 50;
+
+    // Cuánto se espera a la base de origen, en segundos: un PDF grande por la red puede tardar más que los 30 de siempre.
+    private const int EsperaDeOrigen = 300;
 
     private readonly Qdrant _qdrant;
     private readonly string _conexion;
@@ -162,7 +168,7 @@ public sealed class Documentos
                     // Solo se guarda el contenido nuevo y vuelve a pendiente: los fragmentos y los vectores viejos los borra el Cargador
                     // antes de procesarlo. Mientras tanto no aparece en las búsquedas, porque no está listo.
                     await conexion.ExecuteAsync(new CommandDefinition(
-                        "UPDATE rag.Documento SET Contenido = @contenido, Huella = @huella, Estado = 'pendiente', Detalle = NULL, FechaProceso = NULL " +
+                        "UPDATE rag.Documento SET Contenido = @contenido, Huella = @huella, Estado = 'pendiente', Detalle = NULL, FechaProceso = NULL, Intentos = 0 " +
                         "WHERE DocumentoId = @id;",
                         new { contenido = archivo.Contenido, huella, id = anterior.DocumentoId }, cancellationToken: ct));
                     reemplazados++;
@@ -180,36 +186,52 @@ public sealed class Documentos
         {
             throw new ErrorDeServicio("SQL de origen", 400, "No hay base de origen configurada: completá Conexiones:SqlOrigen, Conexiones:ConsultaLista y Conexiones:ConsultaContenido.", null);
         }
-        int nuevos = 0;
-        int sinCambios = 0;
-        using (SqlConnection conexion = new SqlConnection(_conexion))
-        using (SqlConnection origen = new SqlConnection(_conexionOrigen))
-        {
-            // Los números de origen que ya están anotados, para no anotarlos dos veces.
-            IEnumerable<string> anotados = await conexion.QueryAsync<string>(new CommandDefinition(
-                "SELECT OrigenId FROM rag.Documento WHERE OrigenId IS NOT NULL;", cancellationToken: ct));
-            HashSet<string> yaEstan = new HashSet<string>(anotados, StringComparer.OrdinalIgnoreCase);
 
-            // La lista se lee de a una fila, sin cargarla entera en memoria, y se anota de a lotes de 1.000.
-            List<object> lote = new List<object>();
-            using (DbDataReader filas = await origen.ExecuteReaderAsync(new CommandDefinition(_consultaLista, cancellationToken: ct)))
+        // 1. La lista de la base de origen: el número y el nombre de cada documento. Son dos textos cortos por documento,
+        //    así que decenas de miles entran en memoria sin problema.
+        List<DeOrigen> lista = new List<DeOrigen>();
+        try
+        {
+            using (SqlConnection origen = new SqlConnection(_conexionOrigen))
+            using (DbDataReader filas = await origen.ExecuteReaderAsync(new CommandDefinition(_consultaLista, commandTimeout: EsperaDeOrigen, cancellationToken: ct)))
             {
                 while (await filas.ReadAsync(ct))
                 {
                     string origenId = Convert.ToString(filas.GetValue(0), CultureInfo.InvariantCulture) ?? "";
-                    if (origenId == "" || !yaEstan.Add(origenId))
-                    {
-                        sinCambios++;
-                        continue;
-                    }
                     string nombre = filas.IsDBNull(1) ? "" : (Convert.ToString(filas.GetValue(1), CultureInfo.InvariantCulture) ?? "");
-                    nombre = nombre.Trim() == "" ? "documento-" + origenId + ".pdf" : LimpiarNombre(nombre);
-                    lote.Add(new { archivo = nombre, titulo = Titulo(nombre), origenId });
-                    if (lote.Count == 1000)
-                    {
-                        nuevos += await GuardarLoteAsync(conexion, lote, ct);
-                        lote.Clear();
-                    }
+                    lista.Add(new DeOrigen(origenId, nombre));
+                }
+            }
+        }
+        catch (SqlException ex)
+        {
+            throw ErrorDeOrigen(ex);
+        }
+
+        // 2. Los que todavía no están anotados se guardan como pendientes, de a 1.000.
+        int nuevos = 0;
+        int sinCambios = 0;
+        using (SqlConnection conexion = new SqlConnection(_conexion))
+        {
+            IEnumerable<string> anotados = await conexion.QueryAsync<string>(new CommandDefinition(
+                "SELECT OrigenId FROM rag.Documento WHERE OrigenId IS NOT NULL;", cancellationToken: ct));
+            HashSet<string> yaEstan = new HashSet<string>(anotados, StringComparer.OrdinalIgnoreCase);
+
+            List<object> lote = new List<object>();
+            foreach (DeOrigen documento in lista)
+            {
+                // Add devuelve false si el número ya estaba: anotado de antes, o repetido en la misma lista.
+                if (documento.OrigenId == "" || !yaEstan.Add(documento.OrigenId))
+                {
+                    sinCambios++;
+                    continue;
+                }
+                string nombre = documento.Nombre.Trim() == "" ? "documento-" + documento.OrigenId + ".pdf" : LimpiarNombre(documento.Nombre);
+                lote.Add(new { archivo = nombre, titulo = Titulo(nombre), origenId = documento.OrigenId });
+                if (lote.Count == 1000)
+                {
+                    nuevos += await GuardarLoteAsync(conexion, lote, ct);
+                    lote.Clear();
                 }
             }
             if (lote.Count > 0)
@@ -228,7 +250,7 @@ public sealed class Documentos
         using (SqlConnection conexion = new SqlConnection(_conexion))
         {
             return await conexion.QueryFirstOrDefaultAsync<Pendiente>(new CommandDefinition(
-                "SELECT TOP (1) DocumentoId, Archivo, OrigenId FROM rag.Documento WHERE Estado = 'pendiente' " +
+                "SELECT TOP (1) DocumentoId, Archivo, OrigenId, Huella, Intentos FROM rag.Documento WHERE Estado = 'pendiente' " +
                 "ORDER BY CASE WHEN OrigenId IS NULL THEN 0 ELSE 1 END, DocumentoId;",
                 cancellationToken: ct));
         }
@@ -250,11 +272,54 @@ public sealed class Documentos
         {
             throw new ErrorDeServicio("SQL de origen", 503, "Hay documentos importados pendientes, pero Conexiones:SqlOrigen está vacía: no se pueden leer.", null);
         }
-        using (SqlConnection origen = new SqlConnection(_conexionOrigen))
+        try
         {
-            object? valor = await origen.ExecuteScalarAsync<object?>(new CommandDefinition(
-                _consultaContenido, new { Id = pendiente.OrigenId }, cancellationToken: ct));
-            return valor as byte[];
+            using (SqlConnection origen = new SqlConnection(_conexionOrigen))
+            {
+                object? valor = await origen.ExecuteScalarAsync<object?>(new CommandDefinition(
+                    _consultaContenido, new { Id = pendiente.OrigenId }, commandTimeout: EsperaDeOrigen, cancellationToken: ct));
+                return valor as byte[];
+            }
+        }
+        catch (SqlException ex)
+        {
+            throw ErrorDeOrigen(ex);
+        }
+    }
+
+    /// <summary>Anota que se empieza a procesar un documento: le suma un intento. Si el proceso se cae a mitad, el intento queda contado.</summary>
+    public async Task SumarIntentoAsync(int documentoId, CancellationToken ct)
+    {
+        using (SqlConnection conexion = new SqlConnection(_conexion))
+        {
+            await conexion.ExecuteAsync(new CommandDefinition(
+                "UPDATE rag.Documento SET Intentos = Intentos + 1 WHERE DocumentoId = @id;", new { id = documentoId }, cancellationToken: ct));
+        }
+    }
+
+    /// <summary>Le devuelve el intento a un documento que no se pudo procesar porque un servidor no responde: no fue culpa del documento.</summary>
+    public async Task DevolverIntentoAsync(int documentoId, CancellationToken ct)
+    {
+        using (SqlConnection conexion = new SqlConnection(_conexion))
+        {
+            await conexion.ExecuteAsync(new CommandDefinition(
+                "UPDATE rag.Documento SET Intentos = Intentos - 1 WHERE DocumentoId = @id AND Intentos > 0;", new { id = documentoId }, cancellationToken: ct));
+        }
+    }
+
+    /// <summary>Marca listo un documento, solo si sigue siendo el mismo PDF que se procesó. Si mientras tanto lo reemplazaron o lo borraron, no marca nada y devuelve false: así no queda listo con el contenido viejo.</summary>
+    public async Task<bool> MarcarListoAsync(Pendiente procesado, string? detalle, CancellationToken ct)
+    {
+        string? recortado = detalle != null && detalle.Length > 1000 ? detalle.Substring(0, 1000) : detalle;
+        using (SqlConnection conexion = new SqlConnection(_conexion))
+        {
+            // En un importado la huella es NULL en los dos lados; en un arrastrado tiene que ser la misma con que se empezó.
+            int marcados = await conexion.ExecuteAsync(new CommandDefinition(
+                "UPDATE rag.Documento SET Estado = 'listo', Detalle = @detalle, FechaProceso = SYSDATETIME(), Intentos = 0 " +
+                "WHERE DocumentoId = @id AND Estado = 'pendiente' AND " +
+                "((Huella IS NULL AND @huella IS NULL) OR Huella = @huella);",
+                new { detalle = recortado, id = procesado.DocumentoId, huella = procesado.Huella }, cancellationToken: ct));
+            return marcados > 0;
         }
     }
 
@@ -265,7 +330,7 @@ public sealed class Documentos
         using (SqlConnection conexion = new SqlConnection(_conexion))
         {
             await conexion.ExecuteAsync(new CommandDefinition(
-                "UPDATE rag.Documento SET Estado = @estado, Detalle = @detalle, " +
+                "UPDATE rag.Documento SET Estado = @estado, Detalle = @detalle, Intentos = 0, " +
                 "FechaProceso = CASE WHEN @estado = 'pendiente' THEN NULL ELSE SYSDATETIME() END WHERE DocumentoId = @id;",
                 new { estado, detalle = recortado, id = documentoId }, cancellationToken: ct));
         }
@@ -294,7 +359,7 @@ public sealed class Documentos
 
             double porMinuto = cuenta.Recientes / 10.0;
             return new ResumenDocumentos(cuenta.Listos, cuenta.Pendientes, cuenta.SinTexto, cuenta.ConError, cuenta.Fragmentos,
-                porMinuto, EstimarFalta(cuenta.Pendientes, porMinuto), filas.ToList());
+                porMinuto, EstimarFalta(cuenta.Pendientes, porMinuto), filas.ToList(), "");
         }
     }
 
@@ -330,35 +395,55 @@ public sealed class Documentos
         using (SqlConnection conexion = new SqlConnection(_conexion))
         {
             return await conexion.ExecuteAsync(new CommandDefinition(
-                "UPDATE rag.Documento SET Estado = 'pendiente', Detalle = NULL, FechaProceso = NULL WHERE Estado = 'error';",
+                "UPDATE rag.Documento SET Estado = 'pendiente', Detalle = NULL, FechaProceso = NULL, Intentos = 0 WHERE Estado = 'error';",
                 cancellationToken: ct));
         }
     }
 
-    /// <summary>Rehace todo desde los PDF: borra la colección de Qdrant y todos los fragmentos, y deja todos los documentos pendientes. Devuelve cuántos.</summary>
+    /// <summary>Rehace todo desde los PDF: deja todos los documentos pendientes, borra todos los fragmentos y borra la colección de Qdrant. Devuelve cuántos documentos quedaron pendientes.</summary>
     public async Task<int> ReprocesarTodoAsync(CancellationToken ct)
     {
         await Turno.WaitAsync(ct);
         try
         {
+            int cuantos;
+            using (SqlConnection conexion = new SqlConnection(_conexion))
+            {
+                // Primero todos a pendiente: desde acá ninguno aparece en las búsquedas, y si esto se corta, lo que sigue lo rehace el Cargador.
+                cuantos = await conexion.ExecuteAsync(new CommandDefinition(
+                    "UPDATE rag.Documento SET Estado = 'pendiente', Detalle = NULL, FechaProceso = NULL, Intentos = 0;",
+                    commandTimeout: 600, cancellationToken: ct));
+                // Los fragmentos se borran de a 20.000: un solo borrado de un millón de filas tarda demasiado y traba la tabla.
+                int borrados;
+                do
+                {
+                    borrados = await conexion.ExecuteAsync(new CommandDefinition(
+                        "DELETE TOP (20000) FROM rag.Fragmento;", commandTimeout: 600, cancellationToken: ct));
+                }
+                while (borrados > 0);
+            }
             if (await _qdrant.ExisteColeccionAsync(ct))
             {
                 await _qdrant.BorrarColeccionAsync(ct);
             }
-            using (SqlConnection conexion = new SqlConnection(_conexion))
-            {
-                // Con muchos fragmentos el borrado tarda: se le da hasta 10 minutos.
-                await conexion.ExecuteAsync(new CommandDefinition(
-                    "DELETE FROM rag.Fragmento;", commandTimeout: 600, cancellationToken: ct));
-                return await conexion.ExecuteAsync(new CommandDefinition(
-                    "UPDATE rag.Documento SET Estado = 'pendiente', Detalle = NULL, FechaProceso = NULL;",
-                    commandTimeout: 600, cancellationToken: ct));
-            }
+            return cuantos;
         }
         finally
         {
             Turno.Release();
         }
+    }
+
+    /// <summary>Convierte un error de la base de origen en uno que dice qué servidor es y qué revisar. Si tardó demasiado, el código es 502, que se reintenta; si no se pudo conectar o la consulta está mal, 503.</summary>
+    private ErrorDeServicio ErrorDeOrigen(SqlException error)
+    {
+        string donde = Salud.Describir(_conexionOrigen);
+        // -2 es el número de SQL Server para "se venció el tiempo de espera".
+        if (error.Number == -2)
+        {
+            return new ErrorDeServicio("SQL de origen", 502, "La base de origen (" + donde + ") tardó más de " + EsperaDeOrigen + " segundos en contestar.", error);
+        }
+        return new ErrorDeServicio("SQL de origen", 503, "No se pudo leer la base de origen (" + donde + "): " + error.Message + " Revisá Conexiones:SqlOrigen, Conexiones:ConsultaLista y Conexiones:ConsultaContenido.", error);
     }
 
     /// <summary>Guarda un lote de documentos importados, todos en una transacción. Devuelve cuántos guardó.</summary>
@@ -396,6 +481,9 @@ public sealed class Documentos
         string titulo = Path.GetFileNameWithoutExtension(archivo);
         return titulo == "" ? archivo : titulo;
     }
+
+    /// <summary>Un documento de la lista de la base de origen: su número y su nombre.</summary>
+    private sealed record DeOrigen(string OrigenId, string Nombre);
 
     /// <summary>Un documento que ya estaba cargado con el mismo nombre, con la huella con que se cargó.</summary>
     private sealed record Anterior(int DocumentoId, byte[]? Huella);

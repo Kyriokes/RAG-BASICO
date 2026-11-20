@@ -12,6 +12,9 @@ public sealed class Cargador
     // Un PDF con texto tiene cientos de palabras por página. Menos de esto en promedio, es un escaneo.
     private const int PalabrasPorPaginaMinimas = 40;
 
+    // Cuánto se espera a que PdfPig saque el texto de un PDF. Uno mal armado puede dejarlo dando vueltas sin terminar.
+    private static readonly TimeSpan EsperaDeLectura = TimeSpan.FromMinutes(5);
+
     private readonly Documentos _documentos;
     private readonly Ollama _ollama;
     private readonly Qdrant _qdrant;
@@ -34,7 +37,7 @@ public sealed class Cargador
         _lote = Math.Max(1, config.GetValue("Rag:LoteVectores", 16));
     }
 
-    /// <summary>Procesa el próximo documento pendiente. Devuelve false si no había ninguno. Si el problema es del documento, lo deja en error y devuelve true; si es de un servidor que no responde, lo deja pendiente y lanza el error.</summary>
+    /// <summary>Procesa el próximo documento pendiente. Devuelve false si no había ninguno. Si el problema es del documento, lo deja en error y devuelve true; si es de un servidor, o puede ser pasajero, lo deja pendiente y lanza el error.</summary>
     public async Task<bool> ProcesarSiguienteAsync(CancellationToken ct)
     {
         Pendiente? pendiente = await _documentos.SiguientePendienteAsync(ct);
@@ -55,17 +58,55 @@ public sealed class Cargador
         return true;
     }
 
-    /// <summary>Dice si un error es de un servidor que no responde (Ollama, Qdrant o SQL Server) y no del documento. Un error que el servidor sí contestó, como un texto que Ollama rechaza, es del documento.</summary>
+    /// <summary>Dice si un error es de un servidor y no del documento: Ollama, Qdrant o la base de origen que no responden, cualquier error de Qdrant (una clave mal puesta, por ejemplo), un error de configuración (un modelo de Ollama que no está bajado, por ejemplo) o un error de SQL Server que no sea de tiempo. El documento queda pendiente y no gasta un intento.</summary>
     public static bool EsDeUnServidor(Exception error)
     {
-        return Errores.EsCaida(error) || error is SqlException;
+        if (Errores.EsCaida(error))
+        {
+            return true;
+        }
+        ErrorDeServicio? deServicio = error as ErrorDeServicio;
+        if (deServicio != null)
+        {
+            // Qdrant no rechaza un documento en particular: si contesta con un error, es la configuración o el servidor.
+            // Y un error de configuración se repite con cualquier documento: hay que corregirla, no pasar al siguiente.
+            return deServicio.Servicio == "Qdrant" || deServicio.DeConfiguracion;
+        }
+        SqlException? deSql = error as SqlException;
+        return deSql != null && deSql.Number != NumeroDeTiempoVencido;
     }
 
-    /// <summary>Los pasos de un documento, en orden: borrar lo que hubiera quedado a medias, leer el PDF, sacar el texto, cortarlo, guardar los fragmentos, calcular los vectores, subirlos a Qdrant y marcarlo listo.</summary>
+    /// <summary>Dice si un error puede ser pasajero o puede ser del documento, y no se sabe cuál: un error que contestó Ollama, la base de origen que tardó demasiado o una consulta de SQL Server que venció. Se reintenta, y al tercer intento el documento queda en error.</summary>
+    public static bool EsPasajero(Exception error)
+    {
+        if (EsDeUnServidor(error))
+        {
+            return false;
+        }
+        SqlException? deSql = error as SqlException;
+        return error is ErrorDeServicio || (deSql != null && deSql.Number == NumeroDeTiempoVencido);
+    }
+
+    // El número con que SQL Server avisa que se venció el tiempo de espera de una consulta.
+    private const int NumeroDeTiempoVencido = -2;
+
+    /// <summary>Los pasos de un documento, en orden: contar el intento, borrar lo que hubiera quedado a medias, leer el PDF, sacar el texto, cortarlo, guardar los fragmentos, calcular los vectores, subirlos a Qdrant y marcarlo listo.</summary>
     private async Task ProcesarAsync(Pendiente pendiente, CancellationToken ct)
     {
         try
         {
+            // 0. Los intentos. Si este documento ya se empezó tres veces y nunca terminó, es que hace caer o colgar
+            //    el proceso: queda en error y se sigue con los demás. Si no, se anota que se empieza.
+            if (pendiente.Intentos >= Documentos.IntentosMaximos)
+            {
+                // El intento que se cortó pudo dejar fragmentos y vectores: como no se va a procesar de nuevo, se borran acá.
+                await BorrarVectoresSinFallarAsync(pendiente.DocumentoId);
+                await BorrarFragmentosSinFallarAsync(pendiente.DocumentoId);
+                await _documentos.MarcarAsync(pendiente.DocumentoId, "error", "se empezó a procesar " + pendiente.Intentos + " veces y no terminó: ¿un PDF que cuelga el lector?", ct);
+                return;
+            }
+            await _documentos.SumarIntentoAsync(pendiente.DocumentoId, ct);
+
             // 1. Si un intento anterior quedó a medias, o el PDF cambió, se empieza de cero.
             await _qdrant.BorrarDeDocumentoAsync(pendiente.DocumentoId, ct);
             await BorrarFragmentosAsync(pendiente.DocumentoId, ct);
@@ -88,7 +129,17 @@ public sealed class Cargador
             List<string> paginas;
             try
             {
-                paginas = SacarTexto(contenido);
+                // En otro hilo y con un tope de tiempo: si PdfPig no termina, el documento queda en error y la carga sigue.
+                paginas = await Task.Run(() => SacarTexto(contenido)).WaitAsync(EsperaDeLectura, ct);
+            }
+            catch (TimeoutException)
+            {
+                await _documentos.MarcarAsync(pendiente.DocumentoId, "error", "no se pudo leer el PDF: tardó más de " + (int)EsperaDeLectura.TotalMinutes + " minutos", ct);
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -120,8 +171,15 @@ public sealed class Cargador
             }
 
             // 6. Listo: recién ahora aparece en las búsquedas. Si el texto salió dudoso, queda anotado.
+            //    Se marca solo si sigue siendo el mismo PDF: si mientras tanto lo reemplazaron o lo borraron, lo que se armó no sirve.
             string duda = RevisarTexto(paginas);
-            await _documentos.MarcarAsync(pendiente.DocumentoId, "listo", duda == "" ? null : "texto dudoso: " + duda, ct);
+            bool marcado = await _documentos.MarcarListoAsync(pendiente, duda == "" ? null : "texto dudoso: " + duda, ct);
+            if (!marcado)
+            {
+                _log.LogInformation("{Archivo} cambió o se borró mientras se procesaba: se descarta lo armado.", pendiente.Archivo);
+                await _qdrant.BorrarDeDocumentoAsync(pendiente.DocumentoId, ct);
+                await BorrarFragmentosAsync(pendiente.DocumentoId, ct);
+            }
         }
         catch (Exception ex)
         {
@@ -133,10 +191,19 @@ public sealed class Cargador
             await BorrarFragmentosSinFallarAsync(pendiente.DocumentoId);
             if (EsDeUnServidor(ex))
             {
-                // No es culpa del documento: queda pendiente y el error sale, para que el Procesador espere y reintente.
+                // No es culpa del documento: queda pendiente, se le devuelve el intento y el error sale,
+                // para que el Procesador espere y reintente.
+                await DevolverIntentoSinFallarAsync(pendiente.DocumentoId);
                 throw;
             }
-            _log.LogWarning("No se pudo cargar {Archivo}: {Mensaje}", pendiente.Archivo, ex.Message);
+            if (EsPasajero(ex) && pendiente.Intentos + 1 < Documentos.IntentosMaximos)
+            {
+                // Puede ser pasajero: queda pendiente con el intento contado. Al tercero, queda en error.
+                throw;
+            }
+            // El documento queda en error y no se vuelve a procesar solo: los vectores que llegó a subir no pueden quedar en Qdrant.
+            await BorrarVectoresSinFallarAsync(pendiente.DocumentoId);
+            _log.LogWarning(ex, "No se pudo cargar {Archivo}.", pendiente.Archivo);
             await _documentos.MarcarAsync(pendiente.DocumentoId, "error", ex.Message, ct);
         }
     }
@@ -185,7 +252,33 @@ public sealed class Cargador
         }
         catch (Exception ex)
         {
-            _log.LogWarning("No se pudieron borrar los fragmentos a medias del documento {DocumentoId}: {Mensaje}", documentoId, ex.Message);
+            _log.LogWarning(ex, "No se pudieron borrar los fragmentos a medias del documento {DocumentoId}.", documentoId);
+        }
+    }
+
+    /// <summary>Borra de Qdrant los vectores de un documento que queda en error. Si tampoco se puede, no importa: se borran al reintentarlo, y mientras tanto la búsqueda los descarta porque el documento no está listo.</summary>
+    private async Task BorrarVectoresSinFallarAsync(int documentoId)
+    {
+        try
+        {
+            await _qdrant.BorrarDeDocumentoAsync(documentoId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "No se pudieron borrar de Qdrant los vectores a medias del documento {DocumentoId}.", documentoId);
+        }
+    }
+
+    /// <summary>Le devuelve el intento a un documento después de un error de un servidor. Si tampoco se puede, no importa: a lo sumo le queda un intento menos.</summary>
+    private async Task DevolverIntentoSinFallarAsync(int documentoId)
+    {
+        try
+        {
+            await _documentos.DevolverIntentoAsync(documentoId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "No se pudo devolver el intento del documento {DocumentoId}.", documentoId);
         }
     }
 

@@ -12,11 +12,16 @@ Lo corre iniciar.cmd, el doble clic de la raíz del repo.
 3. Corre la API con dotnet run, que abre el navegador. Queda en esta ventana hasta Ctrl+C.
 SQL Server y Ollama no se arrancan desde acá: SQL Server es un servicio de Windows y Ollama se abre solo
 al iniciar sesión. Si alguno falta, la página lo muestra en rojo, arriba, con lo que hay que hacer.
+Si algo falla antes de arrancar la API, como un error de JSON en conexiones.json, muestra el error y sale con 1.
 
 .EXAMPLE
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\iniciar.ps1
 #>
 param()
+
+# Cualquier error corta el script y cae en el catch del final, que lo muestra y sale con 1.
+# Sin esto, PowerShell 5.1 sale con 0 y iniciar.cmd cierra la ventana antes de poder leer el error.
+$ErrorActionPreference = 'Stop'
 
 # Para que PowerShell 5.1 muestre bien las tildes, la consola pasa a UTF-8 mientras corre el script.
 $codificacionAnterior = [Console]::OutputEncoding
@@ -26,9 +31,15 @@ try {
     $api = Join-Path $raiz 'RagBasico.Api'
 
     # Lee Conexiones:Qdrant de un archivo JSON. Devuelve vacío si el archivo no existe o no trae esa línea.
+    # Si el archivo tiene un error de JSON, el error dice cuál archivo es.
     function Leer-Qdrant([string]$ruta) {
         if (-not (Test-Path -LiteralPath $ruta)) { return '' }
-        $json = [System.IO.File]::ReadAllText($ruta, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+        try {
+            $json = [System.IO.File]::ReadAllText($ruta, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+        }
+        catch {
+            throw "$ruta tiene un error de JSON (una coma de más, una comilla sin cerrar o una barra invertida sin duplicar): $($_.Exception.Message)"
+        }
         if ($json.Conexiones -and $json.Conexiones.Qdrant) { return [string]$json.Conexiones.Qdrant }
         return ''
     }
@@ -87,6 +98,10 @@ try {
         Pop-Location
     }
     exit $salida
+}
+catch {
+    Write-Host "ERROR: no se pudo arrancar. $($_.Exception.Message)"
+    exit 1
 }
 finally {
     try { [Console]::OutputEncoding = $codificacionAnterior } catch { }

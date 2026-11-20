@@ -38,10 +38,10 @@ SQL Server es la base que manda. El id de cada punto de Qdrant es el número de 
 2. Full-Text: que esté instalado (si no, `error`) y sin cambios pendientes (si hay, `aviso`).
 3. Los dos modelos instalados en Ollama.
 4. La dimensión de los vectores: 1024.
-5. Qdrant: si no responde, `error`. Si la colección todavía no existe, `aviso`. Si tiene una cantidad de puntos distinta a la de fragmentos de los documentos listos, `aviso`, con "Reprocesar todo".
+5. Qdrant: si no responde, `error`. Si la colección todavía no existe, `aviso`. Si tiene más puntos que fragmentos hay en la base (trae puntos de otra carga), o, sin pendientes, una cantidad distinta a la de fragmentos de los documentos listos, `aviso`, con "Reprocesar todo".
 6. La base de origen, solo si está configurada: si no conecta o la consulta de la lista falla, `aviso`.
 
-Con algún `error`, el código HTTP es 503. Las dos páginas muestran estos chequeos arriba, con un punto verde, amarillo o rojo.
+Los chequeos corren todos a la vez, así un servidor caído no demora a los demás. Con algún `error`, el código HTTP es 503. Las dos páginas muestran estos chequeos arriba, con un punto verde, amarillo o rojo.
 
 **Cargar un PDF arrastrado (`POST /documentos`):**
 
@@ -54,7 +54,7 @@ Con algún `error`, el código HTTP es 503. Las dos páginas muestran estos cheq
 **Importar de la base de origen (`POST /documentos/importar`):**
 
 1. `Documentos.AnotarOrigenAsync` corre `Conexiones:ConsultaLista` contra `Conexiones:SqlOrigen`. La consulta devuelve dos columnas: el número de cada documento y su nombre. No trae los PDF.
-2. Anota como `pendiente`, con su número en `OrigenId`, cada documento que todavía no esté. Lee la lista de a una fila y guarda de a 1.000, así sirve con decenas de miles.
+2. Anota como `pendiente`, con su número en `OrigenId`, cada documento que todavía no esté, de a 1.000. La lista entera son dos textos cortos por documento: decenas de miles entran en memoria sin problema.
 3. Los importados no guardan el PDF: se identifican por su número, no por su nombre, así que dos con el mismo nombre no se pisan.
 
 **Procesar los pendientes (el `Procesador`, en segundo plano):**
@@ -62,13 +62,16 @@ Con algún `error`, el código HTTP es 503. Las dos páginas muestran estos cheq
 1. El `Procesador` es un bucle que arranca con la API. En cada vuelta le pide a `Cargador.ProcesarSiguienteAsync` que procese un documento. Si no había ninguno, espera 5 segundos. Si un servidor no responde, lo anota en el log una vez y espera 30.
 2. El `Cargador` pide el próximo pendiente: primero los arrastrados, después los importados, así un PDF que se suelta en la página no espera detrás de miles.
 3. Toma el turno (`Documentos.Turno`): mientras procesa un documento, nadie le borra los fragmentos ni los vectores.
-4. Borra lo que hubiera quedado de un intento anterior: sus puntos de Qdrant y sus fragmentos de SQL.
+4. Le suma un intento (`Intentos`). Si ya llevaba 3 sin terminar, borra los fragmentos y los vectores que hubiera dejado, lo deja en `error` y sigue: así un PDF que cuelga o hace caer el proceso no frena a los demás. Después borra lo que hubiera quedado de un intento anterior: sus puntos de Qdrant y sus fragmentos de SQL.
 5. Consigue los bytes: de `rag.Documento.Contenido` si se arrastró, o de la base de origen con `Conexiones:ConsultaContenido` si se importó. Si no están, el documento queda en `error`.
-6. PdfPig saca el texto de cada página. Si el PDF está roto o tiene clave, queda en `error` con el motivo. Si tiene menos de 40 palabras por página en promedio, es un escaneo: queda `sin texto`.
+6. PdfPig saca el texto de cada página, con un tope de 5 minutos. Si el PDF está roto, tiene clave o no termina, queda en `error` con el motivo. Si tiene menos de 40 palabras por página en promedio, es un escaneo: queda `sin texto`.
 7. `Chunker.Partir` lo corta por párrafos, y los fragmentos se guardan en `rag.Fragmento`, en una transacción, cada uno empezando con `Documento: <nombre>`.
 8. De a `Rag:LoteVectores` fragmentos, le pide los vectores a Ollama y los sube a Qdrant: el id del punto es el número de fragmento, y lleva el número de documento como dato extra.
-9. Marca el documento `listo`. Recién entonces aparece en las búsquedas. Si el texto salió dudoso (palabras pegadas, caracteres raros), queda anotado en `Detalle`.
-10. Si falla por el documento, queda en `error` con el motivo y se sigue con el próximo. Si falla porque un servidor no responde, el documento sigue `pendiente`, sin fragmentos a medias, y se reintenta.
+9. Marca el documento `listo`, solo si sigue siendo el mismo PDF: si mientras tanto lo reemplazaron o lo borraron, descarta lo armado. Recién `listo` aparece en las búsquedas. Si el texto salió dudoso (palabras pegadas, caracteres raros), queda anotado en `Detalle`.
+10. Si algo falla, depende de quién tuvo la culpa:
+    - **El documento** (no es un PDF, está roto, es un escaneo): queda en `error` o `sin texto` con el motivo, sin fragmentos en SQL ni vectores en Qdrant, y se sigue con el próximo.
+    - **Un servidor** (Ollama, Qdrant o la base de origen no responden, Qdrant contesta con un error, como una clave mal puesta, Ollama está mal configurado, porque el modelo no está bajado o da vectores de otro tamaño, o falla SQL Server): el documento sigue `pendiente`, sin fragmentos a medias y sin gastar un intento, y se reintenta cada 30 segundos. La página muestra el motivo.
+    - **No se sabe** (Ollama contestó con otro error, o una consulta tardó demasiado): se reintenta, y al tercer intento queda en `error`.
 
 Como el estado está en la tabla, la API se puede apagar en cualquier momento: al volver sigue donde quedó.
 
@@ -81,12 +84,12 @@ Como el estado está en la tabla, la API se puede apagar en cualquier momento: a
 
 **Mirar, borrar y rehacer:**
 
-- `GET /documentos` devuelve cuántos documentos hay en cada estado, cuántos fragmentos, cuántos documentos por minuto se procesaron en los últimos 10 minutos, lo que falta, y una página de 50 documentos, de todos o de un estado.
+- `GET /documentos` devuelve cuántos documentos hay en cada estado, cuántos fragmentos, cuántos documentos por minuto se procesaron en los últimos 10 minutos, lo que falta, una página de 50 documentos, de todos o de un estado, y, si la carga está frenada, el aviso con el motivo.
 - `DELETE /documentos/{id}` borra los puntos de Qdrant del documento y después su fila; los fragmentos se van en cascada.
 - `POST /documentos/reintentar` pasa los que quedaron en `error` a `pendiente`.
-- `POST /documentos/reprocesar` borra la colección de Qdrant y todos los fragmentos, y deja todos los documentos `pendiente`: se rehace todo desde los PDF.
+- `POST /documentos/reprocesar` deja todos los documentos `pendiente`, borra todos los fragmentos (de a 20.000) y borra la colección de Qdrant: se rehace todo desde los PDF.
 
-La colección de Qdrant se crea sola antes de subir los primeros vectores, con vectores de 1024 números comparados por coseno y con dos umbrales bajos: `indexing_threshold` en 10 KB, para que Qdrant arme el índice HNSW enseguida, y `full_scan_threshold` en 10 KB, para que la búsqueda lo use.
+La colección de Qdrant se crea sola antes de subir los primeros vectores, con vectores de 1024 números comparados por coseno y con dos umbrales bajos: `indexing_threshold` en 10 KB, para que Qdrant arme el índice HNSW enseguida, y `full_scan_threshold` en 10 KB, para que la búsqueda lo use. También se le crea un índice sobre el dato `documentoId`, para que borrar los puntos de un documento no recorra toda la colección.
 
 **Buscar (`GET /buscar?q=...&modo=...`):** `Buscador.ElegirModo` controla el modo; si no existe, la API devuelve un error 400. Solo se buscan los documentos `listo`.
 
@@ -108,8 +111,8 @@ Se mezclan puestos y no puntajes porque el `RANK` del Full-Text y la distancia c
 
 **Responder errores claros:**
 
-1. Delante de los clientes de Ollama y de Qdrant hay un `DetectorDeCaidas`: si el servicio no responde, el error dice cuál y en qué dirección.
-2. Cualquier error que nadie atrapó lo atiende el `ManejadorDeErrores`: Ollama o Qdrant que no responden son 503; que respondieron con un error, 502; que tardaron demasiado, 504; cualquier error de SQL Server, 503; un pedido que no se pudo leer, 400; una subida demasiado grande, 413; y el resto, 500.
+1. Delante de los clientes de Ollama y de Qdrant hay un `DetectorDeCaidas`, que lleva el reloj de cada pedido: si el servicio no responde, o no responde a tiempo (un firewall que descarta los pedidos, por ejemplo), el error dice cuál y en qué dirección. Un error de la base de origen también dice que es esa base y qué revisar.
+2. Cualquier error que nadie atrapó lo atiende el `ManejadorDeErrores`: Ollama o Qdrant que no responden son 503; que respondieron con un error, 502; que no respondieron a tiempo, 504; cualquier error de SQL Server, 503; un pedido que no se pudo leer, 400; una subida demasiado grande, 413; y el resto, 500.
 3. Los errores salen en el formato estándar ProblemDetails (`application/problem+json`): `title`, `status` y `detail`. `UseStatusCodePages` le pone ese cuerpo también a los errores que salían vacíos: 404, 405 y 415. Las páginas muestran el título y el detalle.
 
 **Las páginas:**
@@ -134,6 +137,7 @@ Base de `Conexiones:SqlTextos` (en casa, `RagBasico_F9`), esquema `rag`. Todo `s
 | `rag.Documento` | `Detalle` | `NVARCHAR(1000)` | El motivo, si quedó en `error` o `sin texto`, o la duda sobre el texto si quedó `listo` |
 | `rag.Documento` | `FechaCarga` | `DATETIME2` | Cuándo se anotó. Por defecto, la fecha del servidor |
 | `rag.Documento` | `FechaProceso` | `DATETIME2` | Cuándo dejó de estar pendiente. Con esto se calcula la velocidad |
+| `rag.Documento` | `Intentos` | `INT` | Cuántas veces se empezó a procesar sin terminar. Con 3, queda en `error` |
 | `rag.Fragmento` | `FragmentoId` | `INT IDENTITY` | Número del fragmento, clave primaria y clave del índice Full-Text. Es también el id de su punto en Qdrant |
 | `rag.Fragmento` | `DocumentoId` | `INT` | A qué documento pertenece. Si se borra el documento, se borra el fragmento (cascada) |
 | `rag.Fragmento` | `Orden` | `INT` | Posición del fragmento dentro del documento, desde 1 |
@@ -191,11 +195,11 @@ El resto no hace falta tocarlo para cambiar de servidor:
 | `Ollama:InstruccionPregunta` | `Given a question, retrieve relevant passages that answer the question` | La instrucción que va antes de cada pregunta al calcular su vector |
 | `Ollama:SegundosDeEspera` | `300` | Cuánto espera la API una respuesta de Ollama antes de cortar |
 | `Ollama:MantenerCargado` | `30m` | Cuánto tiempo deja Ollama cada modelo en memoria después del último pedido |
-| `Qdrant:SegundosDeEspera` | `10` | Cuánto espera la API a Qdrant |
+| `Qdrant:SegundosDeEspera` | `30` | Cuánto espera la API a Qdrant |
 | `Logging:LogLevel:Default` | `Information` | Cuánto detalle escribe el log en la consola |
 | `Logging:LogLevel:Microsoft.AspNetCore` | `Warning` | Menos detalle para los mensajes internos de ASP.NET Core |
 | `Logging:LogLevel:System.Net.Http.HttpClient` | `Warning` | Sin cuatro líneas en la consola por cada pedido a Ollama y a Qdrant |
-| `AllowedHosts` | `*` | Qué nombres de servidor acepta la API: `*` es cualquiera |
+| `AllowedHosts` | `127.0.0.1;localhost` | A qué nombres tiene que venir dirigido un pedido para que la API lo acepte: solo los de esta PC. Con otro, responde 400. Además, `Program.cs` rechaza con 403 los pedidos que cambian algo (`POST`, `DELETE`) si vienen de una página de otro sitio: mira el encabezado `Origin` |
 
 Fuera de `appsettings.json`:
 

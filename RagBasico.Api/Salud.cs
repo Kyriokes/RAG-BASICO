@@ -33,16 +33,18 @@ public sealed class Salud
     /// <summary>Corre todos los chequeos. El estado general es "error" si falla algo sin lo que no se puede preguntar, "aviso" si algo anda a medias, y "ok" si anda todo.</summary>
     public async Task<InformeSalud> RevisarAsync(CancellationToken ct)
     {
-        List<Chequeo> chequeos = new List<Chequeo>();
-        chequeos.Add(await RevisarSqlAsync(ct));
-        chequeos.Add(await RevisarFullTextAsync(ct));
-        chequeos.Add(await RevisarModelosAsync(ct));
-        chequeos.Add(await RevisarDimensionAsync(ct));
-        chequeos.Add(await RevisarQdrantAsync(ct));
+        // Los chequeos arrancan todos juntos: con un servidor caído, se espera lo que tarda el más lento y no la suma.
+        List<Task<Chequeo>> tareas = new List<Task<Chequeo>>();
+        tareas.Add(RevisarSqlAsync(ct));
+        tareas.Add(RevisarFullTextAsync(ct));
+        tareas.Add(RevisarModelosAsync(ct));
+        tareas.Add(RevisarDimensionAsync(ct));
+        tareas.Add(RevisarQdrantAsync(ct));
         if (_conexionOrigen != "")
         {
-            chequeos.Add(await RevisarOrigenAsync(ct));
+            tareas.Add(RevisarOrigenAsync(ct));
         }
+        List<Chequeo> chequeos = (await Task.WhenAll(tareas)).ToList();
 
         string estado = "ok";
         if (chequeos.Any(c => c.Estado == "aviso"))
@@ -200,7 +202,7 @@ public sealed class Salud
         }
     }
 
-    /// <summary>Qdrant: que responda y que tenga un punto por cada fragmento de los documentos listos. Si no responde es un error: sin Qdrant no hay búsqueda por significado.</summary>
+    /// <summary>Qdrant: que responda, que no tenga puntos de otra carga y que tenga un punto por cada fragmento de los documentos listos. Si no responde es un error: sin Qdrant no hay búsqueda por significado.</summary>
     private async Task<Chequeo> RevisarQdrantAsync(CancellationToken ct)
     {
         const string nombre = "Qdrant";
@@ -214,6 +216,12 @@ public sealed class Salud
             }
             InfoColeccion info = await _qdrant.LeerInfoAsync(ct);
             Fragmentos fragmentos = await ContarFragmentosAsync(ct);
+            // Los fragmentos se guardan antes que sus puntos: Qdrant nunca puede tener más puntos que fragmentos hay en la base.
+            // Si tiene más, la colección trae puntos de otra base o de otra carga, y la búsqueda por significado devolvería cualquier cosa.
+            if (info.Puntos > fragmentos.Todos)
+            {
+                return new Chequeo(nombre, "aviso", donde + "La colección " + _qdrant.Coleccion + " tiene " + info.Puntos + " puntos y la base solo " + fragmentos.Todos + " fragmentos: tiene puntos de otra carga. En la página Documentos, apretá \"Reprocesar todo\", o usá otra colección en Conexiones:ColeccionQdrant.");
+            }
             // Mientras hay documentos pendientes, los números se mueven: recién se comparan cuando no queda ninguno.
             if (fragmentos.Pendientes == 0 && info.Puntos != fragmentos.DeListos)
             {
@@ -231,7 +239,7 @@ public sealed class Salud
             {
                 return new Chequeo(nombre, "aviso", "Qdrant responde en " + _direccionQdrant + ", pero no se pudo comparar con la base: SQL Server no responde.");
             }
-            return new Chequeo(nombre, "error", ex.Message + " Revisá Conexiones:Qdrant y que Qdrant esté andando. En casa lo arranca iniciar.cmd; en otra máquina tiene que escuchar en la red.");
+            return new Chequeo(nombre, "error", ex.Message + " Revisá Conexiones:Qdrant y que Qdrant esté andando. En casa lo arranca iniciar.cmd; en otra máquina tiene que escuchar en la red. Si respondió 401 o 403, falta o está mal Conexiones:ClaveQdrant.");
         }
     }
 
@@ -260,7 +268,7 @@ public sealed class Salud
         }
     }
 
-    /// <summary>Cuenta los fragmentos de los documentos listos y los documentos pendientes.</summary>
+    /// <summary>Cuenta los fragmentos de los documentos listos, todos los fragmentos y los documentos pendientes.</summary>
     private async Task<Fragmentos> ContarFragmentosAsync(CancellationToken ct)
     {
         using (SqlConnection conexion = new SqlConnection(_conexion))
@@ -268,6 +276,7 @@ public sealed class Salud
             return await conexion.QuerySingleAsync<Fragmentos>(new CommandDefinition(
                 "SELECT " +
                 "(SELECT COUNT(*) FROM rag.Fragmento AS f JOIN rag.Documento AS d ON d.DocumentoId = f.DocumentoId WHERE d.Estado = 'listo') AS DeListos, " +
+                "(SELECT COUNT(*) FROM rag.Fragmento) AS Todos, " +
                 "(SELECT COUNT(*) FROM rag.Documento WHERE Estado = 'pendiente') AS Pendientes;",
                 cancellationToken: ct));
         }
@@ -284,5 +293,5 @@ public sealed class Salud
     private sealed record Conteo(int Listos, int Pendientes, int SinCargar, int Fragmentos);
 
     /// <summary>Los números que se comparan con los puntos de Qdrant.</summary>
-    private sealed record Fragmentos(int DeListos, int Pendientes);
+    private sealed record Fragmentos(int DeListos, int Todos, int Pendientes);
 }

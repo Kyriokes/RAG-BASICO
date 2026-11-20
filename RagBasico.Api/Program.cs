@@ -7,15 +7,19 @@ var builder = WebApplication.CreateBuilder(args);
 // Git lo ignora, así los nombres de los servidores y las claves no se suben.
 builder.Configuration.AddJsonFile("conexiones.json", optional: true, reloadOnChange: false);
 
-// Ollama como cliente HTTP: la dirección y el tiempo de espera salen de la configuración.
+// Cuánto se espera a cada servicio. El reloj lo lleva el DetectorDeCaidas, que va delante de cada cliente:
+// así, si se vence, el error dice qué servicio fue. El tiempo del HttpClient queda 10 segundos más largo, de respaldo.
+TimeSpan esperaOllama = TimeSpan.FromSeconds(builder.Configuration.GetValue("Ollama:SegundosDeEspera", 300));
+TimeSpan esperaQdrant = TimeSpan.FromSeconds(builder.Configuration.GetValue("Qdrant:SegundosDeEspera", 30));
+// Ollama como cliente HTTP: la dirección sale de la configuración.
 builder.Services.AddHttpClient<Ollama>(cliente =>
 {
     cliente.BaseAddress = new Uri(builder.Configuration["Conexiones:Ollama"] ?? "http://127.0.0.1:11434");
-    cliente.Timeout = TimeSpan.FromSeconds(builder.Configuration.GetValue("Ollama:SegundosDeEspera", 300));
-}).AddHttpMessageHandler(() => new DetectorDeCaidas("Ollama"));
-// Qdrant también como cliente HTTP: Qdrant.Configurar le pone la dirección, un tiempo de espera corto y la clave, si hay.
+    cliente.Timeout = esperaOllama + TimeSpan.FromSeconds(10);
+}).AddHttpMessageHandler(() => new DetectorDeCaidas("Ollama", esperaOllama));
+// Qdrant también como cliente HTTP: Qdrant.Configurar le pone la dirección, el tiempo de respaldo y la clave, si hay.
 builder.Services.AddHttpClient<Qdrant>(cliente => Qdrant.Configurar(cliente, builder.Configuration))
-    .AddHttpMessageHandler(() => new DetectorDeCaidas("Qdrant"));
+    .AddHttpMessageHandler(() => new DetectorDeCaidas("Qdrant", esperaQdrant));
 // Un objeto nuevo de cada uno por pedido HTTP.
 builder.Services.AddScoped<Documentos>();
 builder.Services.AddScoped<Cargador>();
@@ -54,7 +58,7 @@ app.Lifetime.ApplicationStarted.Register(() =>
             }
             catch (Exception ex)
             {
-                app.Logger.LogWarning("No se pudieron cargar los modelos en Ollama al arrancar: {Mensaje}", ex.Message);
+                app.Logger.LogWarning(ex, "No se pudieron cargar los modelos en Ollama al arrancar.");
             }
         }
     });
@@ -64,6 +68,24 @@ app.Lifetime.ApplicationStarted.Register(() =>
 app.UseExceptionHandler();
 // Las respuestas de error sin cuerpo, como un 404, un 405 o un 415, salen también como ProblemDetails.
 app.UseStatusCodePages();
+
+// Los pedidos que cambian algo, como subir, borrar o reprocesar, solo se aceptan de las páginas de esta misma API.
+// El navegador manda en el encabezado Origin la dirección de la página que hace el pedido: si es de otro sitio, se rechaza.
+// Así una página cualquiera de internet, abierta en esta PC, no puede borrar ni reprocesar los documentos.
+// Un pedido sin Origin, como los de RagBasico.Api.http, no viene de una página y pasa.
+app.Use(async (HttpContext contexto, RequestDelegate siguiente) =>
+{
+    HttpRequest pedido = contexto.Request;
+    bool soloLee = HttpMethods.IsGet(pedido.Method) || HttpMethods.IsHead(pedido.Method) || HttpMethods.IsOptions(pedido.Method);
+    string origen = pedido.Headers.Origin.ToString();
+    string propio = pedido.Scheme + "://" + pedido.Host.Value;
+    if (!soloLee && origen != "" && !string.Equals(origen, propio, StringComparison.OrdinalIgnoreCase))
+    {
+        await Results.Problem(title: "El pedido viene de otra página", detail: "Este pedido solo se acepta desde las páginas de la propia API, y llegó desde " + origen + ".", statusCode: 403).ExecuteAsync(contexto);
+        return;
+    }
+    await siguiente(contexto);
+});
 
 // Las páginas: wwwroot\index.html y lo que tenga al lado. UseDefaultFiles hace que "/" muestre index.html,
 // y UseStaticFiles sirve los archivos de wwwroot. Por eso la información del proyecto está en /info.
@@ -126,7 +148,9 @@ app.MapGet("/documentos", async (string? estado, int? pagina, Documentos documen
     {
         return Results.Problem(title: "Estado desconocido", detail: "No existe el estado '" + estado + "'. Los estados son: " + string.Join(", ", Documentos.Estados) + ".", statusCode: 400);
     }
-    return Results.Ok(await documentos.ResumirAsync(filtro, pagina ?? 1, ct));
+    ResumenDocumentos resumen = await documentos.ResumirAsync(filtro, pagina ?? 1, ct);
+    // Si la carga está frenada porque un servidor no responde, la página lo muestra.
+    return Results.Ok(resumen with { Aviso = Procesador.Aviso });
 });
 
 app.MapDelete("/documentos/{id:int}", async (int id, Documentos documentos, CancellationToken ct) =>

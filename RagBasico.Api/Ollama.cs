@@ -88,12 +88,14 @@ public sealed class Ollama
             {
                 throw new InvalidOperationException("Ollama no devolvió un vector por cada texto.");
             }
-            // Si alguien cambia el modelo por otro de otra dimensión, mejor un error claro que vectores que SQL no acepta.
+            // Si alguien cambia el modelo por otro de otra dimensión, mejor un error claro que vectores que Qdrant no acepta.
+            // Es de configuración: pasa con cualquier texto, así que no es culpa del documento que se está cargando.
             foreach (float[] vector in cuerpo.Embeddings)
             {
                 if (vector.Length != Dimension)
                 {
-                    throw new InvalidOperationException("El modelo " + _modeloEmbeddings + " devolvió vectores de " + vector.Length + " números, y la base espera " + Dimension + ".");
+                    string mensaje = "El modelo " + _modeloEmbeddings + " devolvió vectores de " + vector.Length + " números, y la colección de Qdrant espera " + Dimension + ". Revisá Conexiones:ModeloEmbeddings.";
+                    throw new ErrorDeServicio("Ollama", 502, mensaje, null) { DeConfiguracion = true };
                 }
             }
             return cuerpo.Embeddings;
@@ -137,15 +139,18 @@ public sealed class Ollama
         await ChatAsync("Respondé solo con la palabra: listo.", "Hola", ct);
     }
 
-    /// <summary>Si Ollama contesta con un error, lanza una excepción con su mensaje real (por ejemplo, "model not found").</summary>
+    /// <summary>Si Ollama contesta con un error, lanza una excepción con su mensaje real (por ejemplo, "model not found"). Un 404, un 401 o un 403 son de configuración: el modelo no está bajado, o Ollama no deja entrar.</summary>
     private static async Task VerificarAsync(HttpResponseMessage respuesta, CancellationToken ct)
     {
         if (respuesta.IsSuccessStatusCode)
         {
             return;
         }
+        int codigo = (int)respuesta.StatusCode;
         string detalle = await respuesta.Content.ReadAsStringAsync(ct);
-        throw new ErrorDeServicio("Ollama", 502, "Ollama respondió " + (int)respuesta.StatusCode + ": " + detalle, null);
+        // Con esos tres códigos Ollama rechaza cualquier pedido, no este texto en particular.
+        bool deConfiguracion = codigo == 404 || codigo == 401 || codigo == 403;
+        throw new ErrorDeServicio("Ollama", 502, "Ollama respondió " + codigo + ": " + detalle, null) { DeConfiguracion = deConfiguracion };
     }
 
     /// <summary>Pasa un tiempo de Ollama, que viene en nanosegundos, a milisegundos.</summary>

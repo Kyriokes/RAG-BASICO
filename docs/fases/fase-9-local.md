@@ -28,11 +28,14 @@ Esta fase corre toda en una PC. La fase 10 es el mismo código, conectado a serv
 | `RagBasico.Api\Qdrant.cs` | La clave opcional, crear la colección si falta y borrar los puntos de un documento. Se fue lo que usaba el sincronizador |
 | `RagBasico.Api\Salud.cs` | Cada chequeo dice la dirección que probó y qué hacer. Qdrant caído es un error. Chequeo de la base de origen. Se fue el chequeo de arranque |
 | `RagBasico.Api\Modelos.cs` | Se fueron los registros de lo que se borró; entraron los de documentos |
-| `RagBasico.Api\Ollama.cs` | Lee los modelos de `Conexiones` |
+| `RagBasico.Api\Ollama.cs` | Lee los modelos de `Conexiones`. Un modelo que no está bajado, o que da vectores de otro tamaño, es un error de configuración |
 | `RagBasico.Api\Redactor.cs` | Lee la conexión de `Conexiones`; la respuesta ya no lleva aviso |
-| `RagBasico.Api\ManejadorDeErrores.cs` | Una subida demasiado grande es un 413 con su motivo |
-| `RagBasico.Api\Program.cs` | Carga `conexiones.json` si existe, arranca siempre, registra el `Procesador`, el tope de subida y los pedidos de documentos |
-| `RagBasico.Api\appsettings.json` | El bloque `Conexiones`, la base `RagBasico_F9`, la colección `fragmentos_f9` y `Rag:MegasPorSubida`. Se fueron `ConnectionStrings`, `Rag:CarpetaDocumentos`, `Rag:ArchivoExamen` y `Rag:ChequearAlArrancar` |
+| `RagBasico.Api\ManejadorDeErrores.cs` | Una subida demasiado grande es un 413 con su motivo, y un servicio que no respondió a tiempo dice cuál |
+| `RagBasico.Api\ErrorDeServicio.cs` | La propiedad `DeConfiguracion`: el error es de cómo está configurado el servicio, no de lo que se le mandó |
+| `RagBasico.Api\DetectorDeCaidas.cs` | Lleva el reloj de cada pedido: un servicio que no responde a tiempo es un error 504 con su nombre y su dirección |
+| `RagBasico.Api\Errores.cs` | `EsCaida` cuenta también al servicio que no respondió a tiempo |
+| `RagBasico.Api\Program.cs` | Carga `conexiones.json` si existe, arranca siempre, registra el `Procesador`, el tope de subida y los pedidos de documentos. Los pedidos que cambian algo solo se aceptan de las páginas de la propia API |
+| `RagBasico.Api\appsettings.json` | El bloque `Conexiones`, la base `RagBasico_F9`, la colección `fragmentos_f9` y `Rag:MegasPorSubida`. Se fueron `ConnectionStrings`, `Rag:CarpetaDocumentos`, `Rag:ArchivoExamen` y `Rag:ChequearAlArrancar`. `AllowedHosts` acepta solo `127.0.0.1` y `localhost` |
 | `RagBasico.Api\Properties\launchSettings.json` | Puerto 5089 |
 | `RagBasico.Api\RagBasico.Api.http` | Los pedidos de esta fase |
 | `RagBasico.Api\wwwroot\index.html` | Tres modos, la franja de estado y los enlaces a las dos páginas |
@@ -86,12 +89,14 @@ El recorrido completo, archivo por archivo, está en [`docs\manual.md`](../manua
 | Medición | Valor | Cómo se midió | Fecha |
 |---|---|---|---|
 | Compilación | 0 advertencias, 0 errores | `dotnet build` | 20/11/2026 |
-| Pruebas | 141 casos, 0 fallas | Un proyecto de prueba aparte, contra SQL Server, Qdrant 1.20.2 y Ollama reales | 20/11/2026 |
-| Lo que cubren las pruebas nuevas | El registro: nuevos, repetidos, reemplazados, rechazados, dos con el mismo nombre en una tanda, importar sin duplicar. El cargador: un PDF con texto, uno que no es PDF, uno de 0 bytes, uno cortado, un escaneo, un importado que ya no está en el origen, Qdrant caído, Ollama caído, procesar dos veces sin duplicar, y el turno | El mismo proyecto | 20/11/2026 |
+| Pruebas | 167 casos, 0 fallas | Un proyecto de prueba aparte, contra SQL Server, Qdrant 1.20.2 y Ollama reales | 21/11/2026 |
+| Lo que cubren las pruebas nuevas | El registro: nuevos, repetidos, reemplazados, rechazados, dos con el mismo nombre en una tanda, importar sin duplicar. El cargador: un PDF con texto, uno que no es PDF, uno de 0 bytes, uno cortado, un escaneo, un importado que ya no está en el origen, Qdrant caído, Ollama caído, procesar dos veces sin duplicar, y el turno. Los arreglos de la revisión: un PDF reemplazado mientras se procesa, un documento que no termina en tres intentos, un servidor caído que no gasta intentos, un servicio que no contesta a tiempo, y reprocesar todo | El mismo proyecto | 20/11/2026 |
 | La API corriendo, de punta a punta | Subir un PDF y un `.txt`: 1 nuevo y 1 rechazado. El PDF se procesó solo: 397 fragmentos en SQL y 397 puntos en Qdrant. Preguntas en los tres modos, con 5 fuentes cada una. Un estado mal escrito, 400; borrar uno que no existe, 404; importar sin base de origen, 400; una subida que pasa el tope, 413 | Pedidos con `curl` contra la API | 20/11/2026 |
 | El aviso de Qdrant desparejo | Con 10 fragmentos borrados a mano en SQL, `GET /salud` avisó "397 puntos y la base 387 fragmentos" y "Reprocesar todo" lo dejó en verde | Pedidos con `curl` | 20/11/2026 |
 | Velocidad de carga | Entre 6 y 13 fragmentos por segundo; un PDF de 30 fragmentos, unos 5 segundos | 397 fragmentos en 64 segundos, y la importación de los 13 PDF de prueba, en una GTX 1070 | 20/11/2026 |
 | El doble clic | Con Qdrant apagado, `iniciar.cmd` lo arrancó en otra ventana y después arrancó la API | A mano | 20/11/2026 |
+| Revisión | Un revisor aparte leyó toda la fase. Nada crítico. Arreglado: un documento problemático podía frenar toda la cola (ahora hay un tope de tres intentos y de 5 minutos para leer un PDF); una clave de Qdrant mal puesta dejaba todos los documentos en error (ahora quedan pendientes); un PDF reemplazado mientras se procesaba quedaba listo con el contenido viejo; cuando la carga se frenaba, la página no lo mostraba; los errores de la base de origen y de un servicio que no contesta a tiempo no decían qué servidor era; "Reprocesar todo" podía quedar a medias con muchos fragmentos | Una revisión aparte del código | 20/11/2026 |
+| Segunda revisión | Una auditoría de fallas, seguridad y legibilidad. Nada crítico ni alto. Arreglado: si `iniciar.ps1` fallaba, la ventana se cerraba sin mostrar el error; un modelo de Ollama sin bajar, o de otra dimensión, dejaba toda la cola en error (ahora la carga se frena con el aviso); un documento que terminaba en error dejaba sus vectores en Qdrant; cualquier página abierta en la PC podía pedir un borrado o un reproceso (ahora se controla el origen y el nombre del servidor); en la página, el error de una acción se borraba solo a los pocos segundos; los pedidos de `/salud` se apilaban si tardaba; y el log guardaba solo el mensaje del error, sin el detalle | 8 casos nuevos en el proyecto de prueba; pedidos con `curl` con y sin `Origin` y con otro `Host`; `iniciar.ps1` con un JSON roto y sin `dotnet`; la página en el navegador | 21/11/2026 |
 | Las páginas | La franja, la lista, el avance y una pregunta con fuentes, en el navegador; a 375 px de ancho no hay barra horizontal | A mano | 20/11/2026 |
 
 Versiones: .NET 10.0.15, Qdrant 1.20.2, `qwen3.5:4b` y `qwen3-embedding:0.6b`. Commit medido: el último de `fase-9-local`.
@@ -118,6 +123,8 @@ Versiones: .NET 10.0.15, Qdrant 1.20.2, `qwen3.5:4b` y `qwen3-embedding:0.6b`. C
 - No lee PDF escaneados: quedan como `sin texto`.
 - No tiene usuarios ni claves: la API escucha solo en la PC donde corre.
 - Procesa un documento por vez. La velocidad la pone el modelo de embeddings.
+- Si dos personas aprietan "Importar" al mismo tiempo, una recibe un error; alcanza con apretar de nuevo.
+- Si la base de origen guarda los PDF comprimidos o como texto, no los lee: tienen que estar en binario (`varbinary` o `image`).
 - No se probó con decenas de miles de documentos: en casa se probó con 13 PDF.
 - "Reprocesar todo" con muchos documentos tarda lo mismo que la primera carga.
 - Si se cambia el modelo de embeddings por uno que no da 1024 números, hay que cambiar `Ollama.Dimension` y reprocesar todo.
