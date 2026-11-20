@@ -12,12 +12,9 @@ builder.Services.AddHttpClient<Ollama>(cliente =>
     cliente.BaseAddress = new Uri(builder.Configuration["Conexiones:Ollama"] ?? "http://127.0.0.1:11434");
     cliente.Timeout = TimeSpan.FromSeconds(builder.Configuration.GetValue("Ollama:SegundosDeEspera", 300));
 }).AddHttpMessageHandler(() => new DetectorDeCaidas("Ollama"));
-// Qdrant también como cliente HTTP, con un tiempo de espera corto.
-builder.Services.AddHttpClient<Qdrant>(cliente =>
-{
-    cliente.BaseAddress = new Uri(builder.Configuration["Conexiones:Qdrant"] ?? "http://127.0.0.1:6333");
-    cliente.Timeout = TimeSpan.FromSeconds(builder.Configuration.GetValue("Qdrant:SegundosDeEspera", 10));
-}).AddHttpMessageHandler(() => new DetectorDeCaidas("Qdrant"));
+// Qdrant también como cliente HTTP: Qdrant.Configurar le pone la dirección, un tiempo de espera corto y la clave, si hay.
+builder.Services.AddHttpClient<Qdrant>(cliente => Qdrant.Configurar(cliente, builder.Configuration))
+    .AddHttpMessageHandler(() => new DetectorDeCaidas("Qdrant"));
 // Un objeto nuevo de cada uno por pedido HTTP.
 builder.Services.AddScoped<Buscador>();
 builder.Services.AddScoped<Redactor>();

@@ -1,18 +1,11 @@
 using System.Net.Http.Json;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace RagBasico.Api;
 
 /// <summary>Habla con Qdrant por HTTP: crea y borra la colección, sube y borra puntos, y busca los vectores más cercanos.</summary>
 public sealed class Qdrant
 {
-    // Los pedidos se mandan sin los campos en null: por ejemplo, la primera página de un recorrido va sin "offset".
-    private static readonly JsonSerializerOptions SinNulos = new JsonSerializerOptions
-    {
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-    };
-
     private readonly HttpClient _http;
     private readonly string _coleccion;
 
@@ -21,6 +14,18 @@ public sealed class Qdrant
     {
         _http = http;
         _coleccion = config["Conexiones:ColeccionQdrant"] ?? "fragmentos";
+    }
+
+    /// <summary>Prepara el HttpClient de Qdrant: la dirección, el tiempo de espera y, si la configuración trae una clave, el encabezado api-key en todos los pedidos.</summary>
+    public static void Configurar(HttpClient cliente, IConfiguration config)
+    {
+        cliente.BaseAddress = new Uri(config["Conexiones:Qdrant"] ?? "http://127.0.0.1:6333");
+        cliente.Timeout = TimeSpan.FromSeconds(config.GetValue("Qdrant:SegundosDeEspera", 10));
+        string clave = config["Conexiones:ClaveQdrant"] ?? "";
+        if (clave.Trim().Length > 0)
+        {
+            cliente.DefaultRequestHeaders.Add("api-key", clave.Trim());
+        }
     }
 
     /// <summary>El nombre de la colección.</summary>
@@ -70,6 +75,15 @@ public sealed class Qdrant
         }
     }
 
+    /// <summary>Crea la colección si todavía no existe. Se llama antes de subir los primeros vectores.</summary>
+    public async Task AsegurarColeccionAsync(CancellationToken ct)
+    {
+        if (!await ExisteColeccionAsync(ct))
+        {
+            await CrearColeccionAsync(ct);
+        }
+    }
+
     /// <summary>Borra la colección con todos sus puntos. Devuelve lo que contestó Qdrant: true si la borró.</summary>
     public async Task<bool> BorrarColeccionAsync(CancellationToken ct)
     {
@@ -112,56 +126,24 @@ public sealed class Qdrant
         }
     }
 
-    /// <summary>Borra puntos de la colección por su id, que es el número de fragmento.</summary>
-    public async Task BorrarPuntosAsync(List<int> ids, CancellationToken ct)
+    /// <summary>Borra todos los puntos de un documento: los que tienen su número en el dato documentoId. Si la colección no existe, no hay nada que borrar.</summary>
+    public async Task BorrarDeDocumentoAsync(int documentoId, CancellationToken ct)
     {
-        var pedido = new { points = ids };
+        if (!await ExisteColeccionAsync(ct))
+        {
+            return;
+        }
+        var pedido = new
+        {
+            filter = new
+            {
+                must = new object[] { new { key = "documentoId", match = new { value = documentoId } } }
+            }
+        };
+        // wait=true: Qdrant contesta cuando los puntos ya están borrados, no antes.
         using (HttpResponseMessage respuesta = await _http.PostAsJsonAsync("/collections/" + _coleccion + "/points/delete?wait=true", pedido, ct))
         {
             await VerificarAsync(respuesta, ct);
-        }
-    }
-
-    /// <summary>Lista los ids de todos los puntos de la colección, recorriéndola de a 1.000.</summary>
-    public async Task<List<int>> ListarIdsAsync(CancellationToken ct)
-    {
-        List<int> ids = new List<int>();
-        int? desde = null;
-        do
-        {
-            var pedido = new { limit = 1000, with_payload = false, with_vector = false, offset = desde };
-            using (HttpResponseMessage respuesta = await _http.PostAsJsonAsync("/collections/" + _coleccion + "/points/scroll", pedido, SinNulos, ct))
-            {
-                JsonElement resultado = await LeerResultadoAsync(respuesta, ct);
-                foreach (JsonElement punto in resultado.GetProperty("points").EnumerateArray())
-                {
-                    ids.Add(punto.GetProperty("id").GetInt32());
-                }
-                // Qdrant dice desde qué id sigue la próxima página, o null si no hay más.
-                JsonElement siguiente;
-                desde = null;
-                if (resultado.TryGetProperty("next_page_offset", out siguiente) && siguiente.ValueKind == JsonValueKind.Number)
-                {
-                    desde = siguiente.GetInt32();
-                }
-            }
-        }
-        while (desde != null);
-        return ids;
-    }
-
-    /// <summary>Lee el vector guardado de un punto. Devuelve null si el punto no existe.</summary>
-    public async Task<float[]?> LeerVectorAsync(int id, CancellationToken ct)
-    {
-        var pedido = new { ids = new int[] { id }, with_vector = true, with_payload = false };
-        using (HttpResponseMessage respuesta = await _http.PostAsJsonAsync("/collections/" + _coleccion + "/points", pedido, ct))
-        {
-            JsonElement resultado = await LeerResultadoAsync(respuesta, ct);
-            foreach (JsonElement punto in resultado.EnumerateArray())
-            {
-                return punto.GetProperty("vector").Deserialize<float[]>();
-            }
-            return null;
         }
     }
 
