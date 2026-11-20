@@ -1,15 +1,16 @@
 ﻿<#
 .SYNOPSIS
-Crea la base de la fase y corre en orden los scripts numerados de sql\.
+Crea la base del RAG: corre sql\base.sql.
 
 .DESCRIPTION
-Toma el servidor y la base de ConnectionStrings:Rag en RagBasico.Api\appsettings.json, salvo que se pasen
--Servidor o -Base. Corre con sqlcmd cada sql\NN_*.sql, en orden, pasándole el nombre de la base en la variable Base.
-Los scripts se pueden correr de nuevo: cada paso controla si ya está hecho.
+Toma el servidor y la base de Conexiones:SqlTextos en RagBasico.Api\appsettings.json, salvo que se pasen
+-Servidor o -Base. Corre sql\base.sql con sqlcmd, pasándole el nombre de la base en la variable Base.
+El script se puede correr de nuevo: cada paso controla si ya está hecho.
+Usa la autenticación de Windows: es para la base de casa. En un servidor con usuario de SQL, sql\base.sql se corre desde SSMS.
 Si el servidor es de esta PC, se conecta por memoria compartida (lpc:), sin el servicio SQL Server Browser.
 
 .PARAMETER Base
-Nombre de la base. Por defecto, el de la cadena de conexión (por ejemplo, RagBasico_F2).
+Nombre de la base. Por defecto, el de la cadena de conexión (por ejemplo, RagBasico_F9).
 
 .PARAMETER Servidor
 Servidor e instancia de SQL Server. Por defecto, el de la cadena de conexión (localhost\SQLEXPRESS).
@@ -40,11 +41,11 @@ try {
     }
 
     $config = [System.IO.File]::ReadAllText((Join-Path $raiz 'RagBasico.Api\appsettings.json'), [System.Text.Encoding]::UTF8) | ConvertFrom-Json
-    $cadena = [string]$config.ConnectionStrings.Rag
+    $cadena = [string]$config.Conexiones.SqlTextos
     if (-not $Base) { $Base = [regex]::Match($cadena, 'Database=([^;]+)').Groups[1].Value }
     if (-not $Servidor) { $Servidor = [regex]::Match($cadena, 'Server=([^;]+)').Groups[1].Value }
     if (-not $Base -or -not $Servidor) {
-        Write-Host 'ERROR: no se pudo leer el servidor o la base de ConnectionStrings:Rag en appsettings.json.'
+        Write-Host 'ERROR: no se pudo leer el servidor o la base de Conexiones:SqlTextos en appsettings.json.'
         exit 1
     }
 
@@ -57,8 +58,7 @@ try {
         $destino = 'lpc:' + $destino
     }
 
-    $scripts = @(Get-ChildItem -LiteralPath (Join-Path $raiz 'sql') -Filter '*.sql' |
-        Where-Object { $_.Name -match '^\d\d_' } | Sort-Object Name)
+    $scripts = @(Get-Item -LiteralPath (Join-Path $raiz 'sql\base.sql'))
     foreach ($script in $scripts) {
         Write-Host "Corriendo $($script.Name) en $Base..."
         # -E: autenticación de Windows; -C: confiar en el certificado de SQL Express; -b: cortar ante un error.
