@@ -1,0 +1,14 @@
+{
+  "Conexiones": {
+    "SqlTextos": "Server=SERVIDOR-SQL,1433;Database=RagBasico;User Id=USUARIO;Password=CLAVE;TrustServerCertificate=True",
+    "Qdrant": "http://SERVIDOR-QDRANT:6333",
+    "ColeccionQdrant": "fragmentos",
+    "ClaveQdrant": "",
+    "Ollama": "http://SERVIDOR-IA:11434",
+    "ModeloChat": "qwen3.5:4b",
+    "ModeloEmbeddings": "qwen3-embedding:0.6b",
+    "SqlOrigen": "Server=SERVIDOR-VIEJO,1433;Database=BASE-VIEJA;User Id=USUARIO-LECTOR;Password=CLAVE;TrustServerCertificate=True",
+    "ConsultaLista": "SELECT TOP 200 Id, Nombre FROM dbo.TABLA_DE_PDF",
+    "ConsultaContenido": "SELECT Contenido FROM dbo.TABLA_DE_PDF WHERE Id = @Id"
+  }
+}

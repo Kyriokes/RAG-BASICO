@@ -1,6 +1,6 @@
 # Instalación
 
-Qué hay que instalar en Windows para correr esta versión en una sola PC, cómo comprobar que cada pieza anda y qué hacer si algo falla. La columna "Desde" dice desde qué fase hace falta cada cosa, para quien abra una branch anterior.
+Qué hay que instalar en Windows para correr esta versión en una sola PC (para conectarla a servidores de otras máquinas, ver [oficina.md](oficina.md)), cómo comprobar que cada pieza anda y qué hacer si algo falla. La columna "Desde" dice desde qué fase hace falta cada cosa, para quien abra una branch anterior.
 
 Los comandos son para Windows PowerShell. Los que dicen "como administrador" van en una consola abierta como administrador: en el menú Inicio, buscá "Windows PowerShell", hacé clic derecho y elegí "Ejecutar como administrador".
 
@@ -57,10 +57,10 @@ Para usar el proyecto alcanza con el navegador: las dos páginas hacen todo. El 
 - **Visual Studio 2026** (la edición Community alcanza), con la carga de trabajo "ASP.NET y desarrollo web". Abre `RagBasico.slnx`, corre la API con F5 y manda los pedidos del `.http` sin extensiones: cada pedido tiene arriba un link "Send Request". Visual Studio 2022 no sirve: no puede usar el SDK de .NET 10.
 - **VS Code**, con la extensión "REST Client" (`humao.rest-client`) para el `.http`, y la API corriendo con `iniciar.cmd`.
 
-Sin editor, los `GET` se abren en el navegador, por ejemplo `http://127.0.0.1:5089/salud` o `http://127.0.0.1:5089/documentos`. Una pregunta se manda desde PowerShell, en otra consola. Lleva JSON, y en Windows PowerShell 5.1 hay que decir que va en UTF-8, o las tildes llegan mal:
+Sin editor, los `GET` se abren en el navegador, por ejemplo `http://127.0.0.1:5090/salud` o `http://127.0.0.1:5090/documentos`. Una pregunta se manda desde PowerShell, en otra consola. Lleva JSON, y en Windows PowerShell 5.1 hay que decir que va en UTF-8, o las tildes llegan mal:
 
 ```powershell
-Invoke-RestMethod -Method Post http://127.0.0.1:5089/preguntar -ContentType 'application/json; charset=utf-8' -Body '{"pregunta":"¿Qué requisitos hay para pedir el reintegro?"}'
+Invoke-RestMethod -Method Post http://127.0.0.1:5090/preguntar -ContentType 'application/json; charset=utf-8' -Body '{"pregunta":"¿Qué requisitos hay para pedir el reintegro?"}'
 ```
 
 ## 4. Ollama y los modelos
@@ -129,7 +129,7 @@ Con el servicio de SQL Server andando, parado en la carpeta del repo, una sola v
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1
 ```
 
-Crea la base `RagBasico_F9` (la de `Conexiones:SqlTextos`, en `RagBasico.Api\appsettings.json`) con sus tres tablas y el índice Full-Text. Se puede correr de nuevo sin romper nada.
+Crea la base `RagBasico_F10` (la de `Conexiones:SqlTextos`, en `RagBasico.Api\appsettings.json`) con sus tres tablas y el índice Full-Text. Se puede correr de nuevo sin romper nada.
 
 Los PDF no van en ninguna carpeta especial: se arrastran a la página "Documentos" y quedan guardados en la base. Tienen que tener texto seleccionable: los escaneados no se pueden leer, y quedan como `sin texto`.
 
@@ -158,7 +158,7 @@ No hace falta instalarlo ni ser administrador, y no pide abrir el firewall: el s
 
 1. **SQL Server:** si su servicio está en inicio manual, arrancalo como administrador: `Start-Service 'MSSQL$SQLEXPRESS'`.
 2. **Ollama:** tiene que estar su ícono en la bandeja. Si no, abrilo desde el menú Inicio.
-3. **Doble clic en `iniciar.cmd`**, en la carpeta del repo. Arranca Qdrant si no está andando, arranca la API y abre el navegador en `http://127.0.0.1:5089/`.
+3. **Doble clic en `iniciar.cmd`**, en la carpeta del repo. Arranca Qdrant si no está andando, arranca la API y abre el navegador en `http://127.0.0.1:5090/`.
 4. **Mirá la franja de arriba de la página:** un punto por pieza. Con todo en verde, anda todo. Un punto amarillo o rojo trae debajo qué pasa y qué hacer.
 
 La primera vez, antes del paso 3, hay que crear la base (punto 7). Después, en la página "Documentos", se arrastran los PDF.
@@ -194,5 +194,5 @@ Al terminar: Ctrl+C en la ventana de `iniciar.cmd`, y cerrar la ventana de Qdran
 | `qdrant.exe` no arranca porque falta `VCRUNTIME140.dll` | Instalá el Visual C++ Redistributable (punto 8) |
 | Windows avisa que el Control inteligente de aplicaciones (Smart App Control) bloqueó un programa, o `iniciar.cmd`, F5 o `scripts\iniciar-qdrant.ps1` fallan con `An Application Control policy has blocked this file` | Ese control bloquea los programas sin firma que Microsoft no conoce, y no admite excepciones para uno solo: `qdrant.exe` viene sin firma, y la API, que se compila en tu PC, también. Para usar el proyecto hay que apagarlo: Seguridad de Windows, "Control de aplicaciones y navegador" ("App & browser control"), "Configuración de Control Inteligente de Aplicaciones" ("Smart App Control settings"), "Desactivado" ("Off"). Ojo: en algunas PC, por ejemplo sin las últimas actualizaciones de Windows, una vez apagado no se puede volver a prender sin restablecer o reinstalar Windows |
 | La franja muestra Qdrant en rojo, o una pregunta da el error `Qdrant no responde` | Qdrant no está andando. Frená la API con Ctrl+C y volvé a abrir `iniciar.cmd`, que lo arranca. Si no arranca, corré `scripts\iniciar-qdrant.ps1` a mano para ver por qué (punto 8). Mientras tanto, la búsqueda "Solo palabras" sigue andando |
-| La API no arranca: `address already in use` | Ya hay una API escuchando en el puerto 5089: en otra ventana de `iniciar.cmd` o en Visual Studio. Frenala con Ctrl+C, o Shift+F5 en Visual Studio |
+| La API no arranca: `address already in use` | Ya hay una API escuchando en el puerto 5090: en otra ventana de `iniciar.cmd` o en Visual Studio. Frenala con Ctrl+C, o Shift+F5 en Visual Studio |
 | Las respuestas tardan mucho | Ollama está usando el procesador: mirá la columna `PROCESSOR` de `ollama ps` (punto 4) |

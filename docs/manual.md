@@ -333,7 +333,22 @@ Los tipos de datos que van y vienen: lo que se manda a `/preguntar`, lo que devu
 
 - *¿Por qué el arranque está en un script y no en el programa?* Para que el programa sea el mismo en una PC y en varios servidores. Lo que cambia entre un lugar y otro queda afuera del código.
 
-## 6. Las decisiones y sus porqués
+## 6. De una PC a los servidores de la oficina
+
+No hay código nuevo para esto. Es la misma API, leyendo otras diez líneas.
+
+1. En `Program.cs`, la línea `builder.Configuration.AddJsonFile("conexiones.json", optional: true, ...)` carga ese archivo si existe, y sus líneas pisan a las de `appsettings.json`.
+2. `conexiones.oficina.ejemplo.json` es el modelo: las diez líneas de `Conexiones` con nombres en mayúsculas para reemplazar.
+3. [`oficina.md`](oficina.md) es la guía: qué preparar en cada servidor, cómo comprobarlo desde la PC del RAG y qué hacer si algo falla.
+
+**Te pueden preguntar:**
+
+- *¿Qué cambia entre tu PC y la oficina?* Un archivo de configuración. `git diff fase-9-local fase-10-oficina --stat` muestra que no cambió ningún archivo de código.
+- *¿Dónde quedan las claves?* En `conexiones.json`, en la PC donde corre la API. Git lo ignora. Con un usuario de Windows para SQL Server no hay ninguna clave escrita.
+- *¿Por qué `scripts\iniciar.ps1` no arranca Qdrant en la oficina?* Porque mira la dirección: si no es de esta PC, no es suyo arrancarlo.
+- *¿Qué es lo primero que falla al pasar a varios servidores?* La red: SQL Server Express trae TCP/IP apagado, Ollama escucha solo en su propia PC, y siempre hay un firewall. Por eso la guía comprueba cada puerto antes de abrir la página.
+
+## 7. Las decisiones y sus porqués
 
 | Decisión | En una frase |
 |---|---|
@@ -349,7 +364,7 @@ Los tipos de datos que van y vienen: lo que se manda a `/preguntar`, lo que devu
 | Tres paquetes y nada más | Dapper (SQL), el cliente de SQL Server y PdfPig (leer PDF). Ollama y Qdrant se hablan por HTTP a mano |
 | Sin interfaces para cambiar de motor | Cambiar de servidor es cambiar una línea. Cambiar de motor es otro proyecto, y prepararlo ahora serían archivos que no se usan |
 
-## 7. Lo que no hace
+## 8. Lo que no hace
 
 Conviene decirlo antes de que lo pregunten:
 
@@ -360,7 +375,7 @@ Conviene decirlo antes de que lo pregunten:
 - **No mide la calidad de las respuestas con números.** Hasta la fase 8 había un examen automático; se sacó porque no hay preguntas escritas para los documentos reales. Sigue en la branch `fase-8-validaciones`.
 - **No responde lo que no está en los documentos.** Eso es a propósito.
 
-## 8. Cómo comprobar que entendiste
+## 9. Cómo comprobar que entendiste
 
 Con el proyecto andando, probá predecir qué va a pasar antes de hacerlo:
 

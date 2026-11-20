@@ -1,6 +1,6 @@
 # Responsabilidades
 
-Qué hace cada archivo, clase, función y endpoint de esta versión, y quién lo usa. Esta es la versión de `fase-9-local`.
+Qué hace cada archivo, clase, función y endpoint de esta versión, y quién lo usa. Esta es la versión de `fase-10-oficina`.
 
 Cómo leerlo:
 
@@ -46,12 +46,14 @@ RAG-BASICO\
 │     ├─ estilos.css               el estilo común a las dos páginas
 │     └─ index.html                la página para preguntar
 ├─ RagBasico.slnx                  la solución que abre Visual Studio
+├─ conexiones.oficina.ejemplo.json modelo de conexiones para otros servidores
 ├─ docs\                           documentación
 │  ├─ arquitectura.md              piezas, recorridos, tablas y configuración
 │  ├─ erratas.md                   bugs encontrados después de cerrar una fase
 │  ├─ fases\
 │  │  ├─ fase-0-base.md            el esqueleto
 │  │  ├─ fase-1-ollama.md          C# y HTTP contra Qwen
+│  │  ├─ fase-10-oficina.md        la misma versión, conectada a otros servidores
 │  │  ├─ fase-2-rag-minimo.md      el primer RAG
 │  │  ├─ fase-3-medicion.md        el examen y los tiempos
 │  │  ├─ fase-4-carga.md           la carga incremental y el corte por párrafos
@@ -62,6 +64,7 @@ RAG-BASICO\
 │  │  └─ fase-9-local.md           la versión para usar: carga por la página
 │  ├─ instalacion.md               qué instalar y cómo comprobar que anda
 │  ├─ manual.md                    en qué orden leer el código
+│  ├─ oficina.md                   cómo conectar los servidores de la oficina
 │  └─ responsabilidades.md         este documento
 ├─ global.json                     versión del SDK de .NET
 ├─ iniciar.cmd                     doble clic para arrancar todo
@@ -105,7 +108,7 @@ RAG-BASICO\
 
 - **Responsabilidad:** la portada del repo: qué es, qué hace falta para correr esta fase, cómo correrla, la tabla de fases y dónde está la documentación.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant, fase-8-validaciones, fase-9-local.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant, fase-8-validaciones, fase-9-local, fase-10-oficina.
 
 ## RagBasico.Api\Buscador.cs
 
@@ -999,7 +1002,7 @@ RAG-BASICO\
 - **Contiene:** un solo perfil, `http`: escucha en `http://127.0.0.1:508N`, donde N es el número de la fase, con el entorno `Development`, y con F5 Visual Studio abre el navegador (`dotnet run` no lo abre: hay que abrir la dirección a mano). Así dos fases pueden correr a la vez. El template traía también un perfil `https` con puertos al azar, que se sacó porque chocaría entre fases.
 - **Por qué 127.0.0.1:** es la misma dirección que usan Ollama y Qdrant, que escuchan solo en IPv4, así todo el proyecto usa una sola. La consecuencia es que la API también escucha solo en IPv4: se la llama con `http://127.0.0.1:508N`, como hacen el archivo `.http` y el navegador que abre el perfil. Con `localhost`, los clientes de .NET (PowerShell, `WebClient`, `HttpClient`) prueban primero IPv6 y tardan unos 2 segundos más en conectarse.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant, fase-8-validaciones, fase-9-local.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant, fase-8-validaciones, fase-9-local, fase-10-oficina.
 
 ## RagBasico.Api\Qdrant.cs
 
@@ -1161,7 +1164,7 @@ RAG-BASICO\
 - **Responsabilidad:** los pedidos de prueba de la fase, listos para mandar con "Send Request" desde Visual Studio, o desde VS Code con la extensión "REST Client".
 - **Contiene:** la variable `@host`, con la dirección y el puerto de la fase, y un pedido por cada endpoint de esta versión.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant, fase-8-validaciones, fase-9-local.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant, fase-8-validaciones, fase-9-local, fase-10-oficina.
 
 ## RagBasico.Api\Redactor.cs
 
@@ -1402,7 +1405,7 @@ RAG-BASICO\
 - **Responsabilidad:** la configuración de la API. Cada clave está explicada en `docs\arquitectura.md`.
 - **Contiene:** cinco bloques. `Conexiones` va primero y junta todo lo que cambia entre casa y la oficina: las dos bases, Qdrant, Ollama, los dos modelos y las dos consultas de la base de origen. `Rag`, `Ollama` y `Qdrant` tienen los ajustes que no dependen del lugar, y `Logging`, el nivel del log. Si al lado existe `conexiones.json`, que git ignora, sus líneas pisan a las de este archivo: así los servidores y las claves de la oficina no se suben.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant, fase-8-validaciones, fase-9-local.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant, fase-8-validaciones, fase-9-local, fase-10-oficina.
 
 ## RagBasico.Api\wwwroot\documentos.html
 
@@ -1452,11 +1455,18 @@ RAG-BASICO\
 - **Desde:** fase-0-base.
 - **Cambió en:** nada todavía.
 
+## conexiones.oficina.ejemplo.json
+
+- **Responsabilidad:** el modelo para conectar la API a servidores de otras máquinas. Se copia a `RagBasico.Api\conexiones.json`, que git ignora, y se reemplazan los nombres en mayúsculas por los reales.
+- **Contiene:** el bloque `Conexiones` con sus diez líneas: la base del RAG con usuario de SQL, Qdrant con su colección y su clave, Ollama con los dos modelos, y la base de origen con las dos consultas. La consulta de la lista trae un `TOP 200`, para que la primera importación sea chica. No tiene nombres de servidores reales ni claves.
+- **Desde:** fase-10-oficina.
+- **Cambió en:** nada todavía.
+
 ## docs\arquitectura.md
 
 - **Responsabilidad:** cómo se arma esta versión: las piezas, los recorridos paso a paso, las tablas, la configuración y lo que está fuera del repo.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant, fase-8-validaciones, fase-9-local.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant, fase-8-validaciones, fase-9-local, fase-10-oficina.
 
 ## docs\erratas.md
 
@@ -1475,6 +1485,12 @@ RAG-BASICO\
 - **Responsabilidad:** qué agregó la fase 1, en qué orden leerla, cómo probarla, qué se midió y qué se decidió.
 - **Desde:** fase-1-ollama.
 - **Cambió en:** fase-7-qdrant.
+
+## docs\fases\fase-10-oficina.md
+
+- **Responsabilidad:** qué agregó la fase 10, que no cambia código: el archivo de conexiones de ejemplo y la guía para la oficina. Qué se comprobó y qué queda para probar contra los servidores reales.
+- **Desde:** fase-10-oficina.
+- **Cambió en:** nada todavía.
 
 ## docs\fases\fase-2-rag-minimo.md
 
@@ -1528,19 +1544,25 @@ RAG-BASICO\
 
 - **Responsabilidad:** qué hay que instalar en Windows para correr esta versión en una sola PC: cómo instalar cada pieza, cómo comprobar que anda, qué arrancar cada vez y qué hacer si algo falla. Dice desde qué fase hace falta cada cosa.
 - **Desde:** fase-7-qdrant.
-- **Cambió en:** fase-8-validaciones, fase-9-local.
+- **Cambió en:** fase-8-validaciones, fase-9-local, fase-10-oficina.
 
 ## docs\manual.md
 
 - **Responsabilidad:** el manual de lectura: en qué orden leer el proyecto para poder explicar cada archivo. Sigue dos recorridos de punta a punta, el de un PDF que se carga y el de una pregunta que se responde, y después lo que sostiene a los dos. De cada archivo dice qué hace, por qué existe, en qué orden leer sus funciones y las preguntas que pueden hacer, con su respuesta.
 - **Desde:** fase-9-local.
+- **Cambió en:** fase-10-oficina.
+
+## docs\oficina.md
+
+- **Responsabilidad:** la guía para conectar cada pieza a su servidor: qué preparar en el SQL Server del RAG, en Qdrant, en Ollama y en la base donde ya están los PDF; qué poner en `conexiones.json`; cómo comprobar cada servidor desde la PC donde corre la API; cómo cargar los documentos de a poco, midiendo la velocidad; y una tabla con lo que puede fallar y qué hacer.
+- **Desde:** fase-10-oficina.
 - **Cambió en:** nada todavía.
 
 ## docs\responsabilidades.md
 
 - **Responsabilidad:** este documento: qué hace cada archivo, clase, función y endpoint, y quién lo usa.
 - **Desde:** fase-0-base.
-- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant, fase-8-validaciones, fase-9-local.
+- **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant, fase-8-validaciones, fase-9-local, fase-10-oficina.
 
 ## global.json
 

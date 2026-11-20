@@ -4,7 +4,9 @@ Un prototipo de RAG (búsqueda en documentos y respuesta redactada por un modelo
 
 Cada fase agrega una pieza y queda marcada con su branch, así el proyecto se puede recorrer de la versión más chica a la final.
 
-**Esta es la fase 9: la versión final, corriendo toda en una PC.** Hace lo mismo que la fase 8 (pregunta, busca y responde citando) con menos código y con cada dato en un solo lugar: los PDF, los párrafos y la búsqueda por palabras en SQL Server; los vectores solo en Qdrant; los modelos en Ollama. Todo lo que conecta está en un solo bloque, `Conexiones`, de `RagBasico.Api\appsettings.json`. Los PDF se cargan arrastrándolos a la página o importándolos de otra base, y se procesan solos en segundo plano. Se arranca con doble clic en `iniciar.cmd`.
+**Esta es la fase 10: la versión final, lista para conectar a los servidores de la oficina.** Es el mismo código de la fase 9, que corre todo en una PC. Lo que agrega es cómo conectar cada pieza a su servidor sin tocar el código: un archivo de conexiones de ejemplo y la guía [docs/oficina.md](docs/oficina.md).
+
+Hace lo de siempre (pregunta, busca y responde citando) con cada dato en un solo lugar: los PDF, los párrafos y la búsqueda por palabras en SQL Server; los vectores solo en Qdrant; los modelos en Ollama. Todo lo que conecta está en un solo bloque, `Conexiones`, de `RagBasico.Api\appsettings.json`. Los PDF se cargan arrastrándolos a la página o importándolos de otra base, y se procesan solos en segundo plano. Se arranca con doble clic en `iniciar.cmd`.
 
 Para entender el código archivo por archivo: [docs/manual.md](docs/manual.md).
 
@@ -29,7 +31,7 @@ Una sola vez, desde la raíz del repo, se crea la base:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1
 ```
 
-Después, cada vez: **doble clic en `iniciar.cmd`**. Arranca Qdrant si no está andando, arranca la API y abre el navegador en `http://127.0.0.1:5089/`. Se frena con Ctrl+C en esa ventana.
+Después, cada vez: **doble clic en `iniciar.cmd`**. Arranca Qdrant si no está andando, arranca la API y abre el navegador en `http://127.0.0.1:5090/`. Se frena con Ctrl+C en esa ventana.
 
 Hay dos páginas:
 
@@ -52,7 +54,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-origen-de-prue
 
 ### Otros servidores
 
-Para conectar la API a servidores de otra máquina no se toca el código ni `appsettings.json`: se crea `RagBasico.Api\conexiones.json` con las líneas de `Conexiones` que cambian. Git ignora ese archivo, así los nombres de los servidores y las claves no se suben.
+Para conectar la API a servidores de otra máquina no se toca el código ni `appsettings.json`: se copia `conexiones.oficina.ejemplo.json` a `RagBasico.Api\conexiones.json` y se completa con los nombres reales. Git ignora ese archivo, así los nombres de los servidores y las claves no se suben. El paso a paso, servidor por servidor, con cómo comprobar cada uno y qué hacer si algo falla: [docs/oficina.md](docs/oficina.md).
 
 ### Controlar la documentación
 
@@ -76,13 +78,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\controlar-docs.ps1
 | 7 | `fase-7-qdrant` | Qdrant como índice de vectores, sincronizado con SQL y con respaldo si se apaga; `/salud` y los modelos cargados al arrancar. Acá queda `main` | 5087 | `RagBasico_F7` | "entre los 5" de `vectores-qdrant` contra `vectores`: pendiente | [fase-7-qdrant.md](docs/fases/fase-7-qdrant.md) |
 | 8 | `fase-8-validaciones` | Validación de la pregunta, errores claros en formato ProblemDetails y chequeos al arrancar | 5088 | `RagBasico_F8` | ninguno nuevo | [fase-8-validaciones.md](docs/fases/fase-8-validaciones.md) |
 | 9 | `fase-9-local` | Cada dato en un solo lugar: vectores solo en Qdrant, toda la conexión en el bloque `Conexiones`, carga de PDF por la página o desde otra base, en segundo plano, y arranque con doble clic. Se van el examen y la carpeta de PDF | 5089 | `RagBasico_F9` | fragmentos por segundo al cargar: entre 6 y 13 | [fase-9-local.md](docs/fases/fase-9-local.md) |
+| 10 | `fase-10-oficina` | El mismo código de la fase 9, conectado a servidores de otras máquinas: el archivo de conexiones de ejemplo y la guía para conectar SQL Server, Qdrant, Ollama y la base donde ya están los PDF | 5090 | `RagBasico_F10` | contra los servidores de la oficina: pendiente | [fase-10-oficina.md](docs/fases/fase-10-oficina.md) |
 
-Para ver qué agregó una fase: `git diff fase-8-validaciones fase-9-local`, o la página "compare" de GitHub entre las dos branches. Las fases anteriores siguen en sus branches: `git switch fase-8-validaciones` abre la fase 8, con su propia documentación.
+Para ver qué agregó una fase: `git diff fase-9-local fase-10-oficina`, o la página "compare" de GitHub entre las dos branches. Las fases anteriores siguen en sus branches: `git switch fase-8-validaciones` abre la fase 8, con su propia documentación.
 
 ## Documentación
 
 - [docs/manual.md](docs/manual.md): el manual de lectura. Recorre los archivos en el orden en que conviene leerlos, siguiendo un PDF y una pregunta de punta a punta.
 - [docs/instalacion.md](docs/instalacion.md): qué instalar, en qué orden, cómo comprobar que anda y qué hacer si algo falla.
+- [docs/oficina.md](docs/oficina.md): cómo conectar cada pieza a su servidor, comprobarlo y cargar los documentos de otra base.
 - [docs/arquitectura.md](docs/arquitectura.md): las piezas, los recorridos, las tablas y la configuración de esta versión.
 - [docs/responsabilidades.md](docs/responsabilidades.md): qué hace cada archivo, clase, función y endpoint.
 - [docs/fases/](docs/fases/): un documento por fase, con lo que cambió, el orden de lectura y los resultados.
