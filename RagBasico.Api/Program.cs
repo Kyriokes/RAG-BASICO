@@ -16,6 +16,7 @@ builder.Services.AddHttpClient<Ollama>(cliente =>
 builder.Services.AddHttpClient<Qdrant>(cliente => Qdrant.Configurar(cliente, builder.Configuration))
     .AddHttpMessageHandler(() => new DetectorDeCaidas("Qdrant"));
 // Un objeto nuevo de cada uno por pedido HTTP.
+builder.Services.AddScoped<Documentos>();
 builder.Services.AddScoped<Buscador>();
 builder.Services.AddScoped<Redactor>();
 builder.Services.AddScoped<Salud>();

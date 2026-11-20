@@ -39,3 +39,18 @@ public sealed record Chequeo(string Nombre, string Estado, string Detalle);
 
 /// <summary>Lo que devuelve GET /salud: el estado general y cada chequeo.</summary>
 public sealed record InformeSalud(string Estado, List<Chequeo> Chequeos);
+
+/// <summary>Un archivo que llegó a la página: su nombre y sus bytes.</summary>
+public sealed record ArchivoSubido(string Nombre, byte[] Contenido);
+
+/// <summary>Lo que devuelve anotar documentos, arrastrados o importados: cuántos son nuevos, cuántos ya estaban igual, cuántos se reemplazaron y cuántos se rechazaron, con el detalle.</summary>
+public sealed record InformeAnotado(int Nuevos, int SinCambios, int Reemplazados, int Rechazados, List<string> Detalle);
+
+/// <summary>Un documento que espera ser procesado. OrigenId es su número en la base de origen, o null si se arrastró a la página.</summary>
+public sealed record Pendiente(int DocumentoId, string Archivo, string? OrigenId);
+
+/// <summary>Un documento en la lista de la página: su estado, el motivo si falló y cuántos fragmentos tiene.</summary>
+public sealed record DocumentoFila(int DocumentoId, string Archivo, string? OrigenId, string Estado, string? Detalle, int Fragmentos, DateTime FechaCarga);
+
+/// <summary>Lo que devuelve GET /documentos: cuántos documentos hay en cada estado, cuántos fragmentos, la velocidad de carga, lo que falta y una página de la lista.</summary>
+public sealed record ResumenDocumentos(int Listos, int Pendientes, int SinTexto, int ConError, int Fragmentos, double DocumentosPorMinuto, string TiempoQueFalta, List<DocumentoFila> Pagina);
