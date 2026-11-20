@@ -1,57 +1,76 @@
 # Arquitectura
 
-Cómo se arma esta versión, `fase-8-validaciones`. Cada fase actualiza este documento, así que en la carpeta de cada fase describe esa fase.
+Cómo se arma esta versión, `fase-9-local`. Cada fase actualiza este documento, así que en cada branch describe esa fase.
 
 ## 1. Piezas
 
-Cuatro: la API web `RagBasico.Api`, que también sirve la página de la demo; SQL Server, que guarda los documentos, los fragmentos con su vector y el índice Full-Text; Qdrant, que tiene una copia de los vectores con un índice HNSW para buscar rápido; y Ollama, que corre dos modelos: `qwen3.5:4b`, que redacta las respuestas, y `qwen3-embedding:0.6b`, que convierte un texto en un vector de 1024 números.
+Cuatro: la API web `RagBasico.Api`, que también sirve las dos páginas; SQL Server, que guarda los documentos, los fragmentos y el índice Full-Text; Qdrant, que guarda los vectores y los busca con un índice HNSW; y Ollama, que corre dos modelos: `qwen3.5:4b`, que redacta las respuestas, y `qwen3-embedding:0.6b`, que convierte un texto en un vector de 1024 números.
 
 ```text
-                                          ┌──►  SQL Server 2025 Express (localhost\SQLEXPRESS, base RagBasico_F8)
-                                          │
-Navegador o .http ──HTTP──► RagBasico.Api ┼──►  Qdrant 1.20.2 (127.0.0.1:6333, colección fragmentos_f8)
-                            127.0.0.1:5088 │
-                                  ▲        └──►  Ollama (qwen3.5:4b y qwen3-embedding:0.6b, 127.0.0.1:11434)
-                                  │
-                                  └── lee los PDF de la carpeta Rag:CarpetaDocumentos
+                                           ┌──►  SQL Server (Conexiones:SqlTextos): los PDF arrastrados, los párrafos,
+                                           │     el índice de palabras y el registro de consultas
+                                           │
+Navegador o .http ──HTTP──► RagBasico.Api  ┼──►  Qdrant (Conexiones:Qdrant): los vectores, y solo ahí
+                            127.0.0.1:5089 │
+                                           ├──►  Ollama (Conexiones:Ollama): el modelo de chat y el de embeddings
+                                           │
+                                           └──►  SQL Server de origen (Conexiones:SqlOrigen), opcional y solo lectura:
+                                                 los PDF que ya están guardados en otra base
 ```
 
-Un vector es una lista de números que representa el significado de un texto: dos textos que dicen lo mismo con otras palabras quedan cerca. La distancia coseno mide qué tan cerca: 0 es el mismo sentido y 2 el opuesto.
+**Cada dato vive en un solo lugar, y cada lugar tiene su línea en el bloque `Conexiones`.** Para mover una pieza a otro servidor se cambia esa línea; el código no se toca.
 
-SQL Server es la base que manda: tiene los textos y los vectores. Qdrant tiene una copia de los vectores, y el id de cada punto es el número de fragmento de SQL: las dos bases se referencian sin una foreign key, así que la API las compara y las iguala. Si Qdrant se apaga, la demo sigue andando con los vectores de SQL.
+Un vector es una lista de números que representa el significado de un texto: dos textos que dicen lo mismo con otras palabras quedan cerca. La distancia coseno mide qué tan cerca.
+
+SQL Server es la base que manda. El id de cada punto de Qdrant es el número de fragmento de SQL, y como el PDF queda guardado en SQL (en la base del RAG si se arrastró, en la de origen si se importó), Qdrant se puede borrar y rehacer entero con "Reprocesar todo". Si Qdrant no responde, la búsqueda por palabras sigue andando y las otras dos dan un error que dice qué pasa.
 
 ## 2. Recorridos
 
-**Preparar la base, una vez:** `scripts\crear-base.ps1` corre `sql\01_base.sql` a `sql\04_vectores.sql` en `RagBasico_F8`. Siempre que se recrea la base, se reconstruye la colección con `POST /qdrant/reconstruir`: si no, los números de fragmento se repiten con otros textos.
+**Preparar la base, una vez:** `scripts\crear-base.ps1` corre `sql\base.sql` en la base de `Conexiones:SqlTextos`. Si se recrea la base, los números de fragmento empiezan de nuevo y Qdrant queda con puntos de la base anterior: `GET /salud` lo avisa, y se arregla con "Reprocesar todo".
 
-**Arrancar Qdrant:** `scripts\iniciar-qdrant.ps1` lo arranca escuchando solo en `127.0.0.1`, con sus datos en `RAG-BASICO-datos\qdrant\storage` y sin telemetría. Queda corriendo en esa consola.
+**Arrancar (`iniciar.cmd`):** corre `scripts\iniciar.ps1`. Lee `Conexiones:Qdrant`; si es de esta PC y no responde, arranca Qdrant en otra ventana con `scripts\iniciar-qdrant.ps1` (escuchando solo en `127.0.0.1`, con sus datos en `RAG-BASICO-datos\qdrant\storage` y sin telemetría). Si Qdrant está en otra máquina, no arranca nada. Después corre la API con `dotnet run`, que abre el navegador.
 
-**Congelar el corpus, una vez:** `scripts\crear-manifiesto.ps1` anota en `documentos.csv` el sha256 de cada PDF. Antes de medir, `-Verificar` controla que la carpeta no haya cambiado.
+**Arrancar la API:** carga `appsettings.json` y, si existe, `conexiones.json`, cuyas líneas pisan a las del primero. Registra los servicios y arranca siempre, aunque falte un servidor: lo que falte lo muestra la página. Cuando ya está escuchando, carga los dos modelos en Ollama en segundo plano, así la primera pregunta no espera la carga, y arranca el `Procesador`.
 
-**Arrancar la API** (`dotnet run` en `RagBasico.Api`, o F5): registra los servicios y, antes de escuchar, controla que estén la base y los dos modelos de Ollama. Si falta algo, escribe en el log por qué y no arranca; Qdrant no se controla, porque la demo sigue sin él (con `Rag:ChequearAlArrancar` en `false`, arranca igual). Después muestra en el log la carpeta de PDF o avisa que no existe. Cuando ya está escuchando, carga los dos modelos en Ollama en segundo plano, así la primera pregunta no espera la carga. La página de la demo está en la raíz: con F5 en Visual Studio se abre sola; con `dotnet run`, se abre a mano.
+**Revisar la salud (`GET /salud`):** un chequeo por pieza, y cada uno dice la dirección que probó y qué hacer.
 
-**Validar y responder errores claros:**
+1. SQL Server: se conecta y cuenta los documentos por estado. Si no conecta, si falta la base o si faltan las tablas, es un `error`.
+2. Full-Text: que esté instalado (si no, `error`) y sin cambios pendientes (si hay, `aviso`).
+3. Los dos modelos instalados en Ollama.
+4. La dimensión de los vectores: 1024.
+5. Qdrant: si no responde, `error`. Si la colección todavía no existe, `aviso`. Si tiene una cantidad de puntos distinta a la de fragmentos de los documentos listos, `aviso`, con "Reprocesar todo".
+6. La base de origen, solo si está configurada: si no conecta o la consulta de la lista falla, `aviso`.
 
-1. `GET /buscar` y `POST /preguntar` controlan la pregunta con `Validador.RevisarPregunta`: vacía, más larga que `Rag:LargoMaximoPregunta` (500), con caracteres de control o sin letras ni números da un 400 con el motivo. Un modo que no existe, también.
-2. Delante de los clientes de Ollama y de Qdrant hay un `DetectorDeCaidas`: si el servicio no responde, el error dice cuál y en qué dirección.
-3. Cualquier error que nadie atrapó lo atiende el `ManejadorDeErrores`: Ollama o Qdrant que no responden son 503; que respondieron con un error, 502; que tardaron demasiado, 504; cualquier error de SQL Server, 503; un pedido que no se pudo leer, como un JSON roto, 400; y el resto, 500.
-4. Los errores salen en el formato estándar ProblemDetails (`application/problem+json`): `title`, `status` y `detail`. `UseStatusCodePages` le pone ese cuerpo también a los errores que salían vacíos: 404 (una ruta que no existe), 405 (un método que no corresponde) y 415 (un cuerpo que no es JSON). La excepción es `GET /salud`, que con estado `error` devuelve su propio informe con código 503. La página de la demo muestra el `detail`.
+Con algún `error`, el código HTTP es 503. Las dos páginas muestran estos chequeos arriba, con un punto verde, amarillo o rojo.
 
-**Revisar la salud (`GET /salud`):** cinco chequeos: SQL Server (documentos, fragmentos y vectores), el Full-Text sin cambios pendientes, los dos modelos instalados en Ollama, la dimensión de los vectores (1024) y Qdrant (versión, colección y vectores en el índice). Si falla algo sin lo que la demo no anda, el estado es `error` y el código HTTP 503. Si falta Qdrant, es un `aviso`: la demo sigue.
+**Cargar un PDF arrastrado (`POST /documentos`):**
 
-**Poner la base al día con la carpeta (`POST /indexar`):**
+1. La página manda los archivos como un formulario. Si la subida pasa de `Rag:MegasPorSubida`, la API contesta 413.
+2. `Documentos.AnotarSubidosAsync` revisa cada archivo. Si no es un PDF (no tiene la marca `%PDF-` al principio), lo rechaza. Si dos tienen el mismo nombre, vale el último.
+3. Calcula la huella de carga: el sha256 de los bytes seguidos de los parámetros de corte (la versión del `Chunker`, el tamaño de fragmento, el solapamiento y la versión de PdfPig).
+4. Si no había un documento con ese nombre, lo guarda con sus bytes, en estado `pendiente`. Si había uno con la misma huella, no hace nada. Si había uno con otra huella, guarda los bytes nuevos y lo vuelve a `pendiente`.
+5. Contesta enseguida, con cuántos son nuevos, cuántos ya estaban, cuántos se reemplazaron y cuántos se rechazaron. No procesa nada.
 
-1. El `Indexador` comprueba que exista la carpeta `Rag:CarpetaDocumentos`. Si no existe, no toca la base y lo informa.
-2. Calcula la huella de carga de cada PDF: el sha256 de sus bytes seguidos de los parámetros de corte, que son la versión del `Chunker`, el tamaño de fragmento, el solapamiento y la versión de PdfPig. Si un PDF no se puede leer, lo anota y lo deja sin huella.
-3. Lee de `rag.Documento` el nombre y la huella de cada documento cargado.
-4. `Planificador.Armar` compara las dos listas por nombre: los PDF que no están en la base son nuevos, los que tienen otra huella cambiaron, los que tienen la misma quedan igual, y los documentos que ya no están en la carpeta se borran. Si la carpeta no tiene ningún PDF, no borra nada. Un PDF sin huella no se carga ni se borra.
-5. Borra los documentos que ya no están en la carpeta. Sus fragmentos se borran en cascada, con sus vectores.
-6. Por cada PDF nuevo o cambiado, PdfPig saca el texto de cada página.
-   - Si tiene menos de 40 palabras por página en promedio, es un escaneo: no se carga, y si había una versión anterior se borra. El detalle dice `SIN TEXTO`.
-   - Si no, `Chunker.Partir` lo corta por párrafos y `Indexador.RevisarTexto` busca señales de texto mal sacado. En una transacción se borra la versión anterior y se guardan el documento con su huella y sus fragmentos, cada uno empezando con `Documento: <nombre>` y sin vector todavía. Si el texto es dudoso, el detalle lo dice, para revisarlo en SSMS.
-7. Los PDF sin cambios no se vuelven a leer, y sus fragmentos conservan el vector. Si no hubo nada que hacer, el detalle dice `SIN CAMBIOS`.
-8. Pone Qdrant al día (ver más abajo): los fragmentos borrados en SQL se borran también de Qdrant.
-9. El Full-Text indexa los fragmentos nuevos solo, en segundo plano, a los pocos segundos.
+**Importar de la base de origen (`POST /documentos/importar`):**
+
+1. `Documentos.AnotarOrigenAsync` corre `Conexiones:ConsultaLista` contra `Conexiones:SqlOrigen`. La consulta devuelve dos columnas: el número de cada documento y su nombre. No trae los PDF.
+2. Anota como `pendiente`, con su número en `OrigenId`, cada documento que todavía no esté. Lee la lista de a una fila y guarda de a 1.000, así sirve con decenas de miles.
+3. Los importados no guardan el PDF: se identifican por su número, no por su nombre, así que dos con el mismo nombre no se pisan.
+
+**Procesar los pendientes (el `Procesador`, en segundo plano):**
+
+1. El `Procesador` es un bucle que arranca con la API. En cada vuelta le pide a `Cargador.ProcesarSiguienteAsync` que procese un documento. Si no había ninguno, espera 5 segundos. Si un servidor no responde, lo anota en el log una vez y espera 30.
+2. El `Cargador` pide el próximo pendiente: primero los arrastrados, después los importados, así un PDF que se suelta en la página no espera detrás de miles.
+3. Toma el turno (`Documentos.Turno`): mientras procesa un documento, nadie le borra los fragmentos ni los vectores.
+4. Borra lo que hubiera quedado de un intento anterior: sus puntos de Qdrant y sus fragmentos de SQL.
+5. Consigue los bytes: de `rag.Documento.Contenido` si se arrastró, o de la base de origen con `Conexiones:ConsultaContenido` si se importó. Si no están, el documento queda en `error`.
+6. PdfPig saca el texto de cada página. Si el PDF está roto o tiene clave, queda en `error` con el motivo. Si tiene menos de 40 palabras por página en promedio, es un escaneo: queda `sin texto`.
+7. `Chunker.Partir` lo corta por párrafos, y los fragmentos se guardan en `rag.Fragmento`, en una transacción, cada uno empezando con `Documento: <nombre>`.
+8. De a `Rag:LoteVectores` fragmentos, le pide los vectores a Ollama y los sube a Qdrant: el id del punto es el número de fragmento, y lleva el número de documento como dato extra.
+9. Marca el documento `listo`. Recién entonces aparece en las búsquedas. Si el texto salió dudoso (palabras pegadas, caracteres raros), queda anotado en `Detalle`.
+10. Si falla por el documento, queda en `error` con el motivo y se sigue con el próximo. Si falla porque un servidor no responde, el documento sigue `pendiente`, sin fragmentos a medias, y se reintenta.
+
+Como el estado está en la tabla, la API se puede apagar en cualquier momento: al volver sigue donde quedó.
 
 **Cortar por párrafos (`Chunker.Partir`):**
 
@@ -60,141 +79,132 @@ SQL Server es la base que manda: tiene los textos y los vectores. Qdrant tiene u
 3. Si un párrafo no entra y el fragmento ya tiene al menos 150 palabras, el fragmento se cierra antes del párrafo. Si tiene menos, el principio del párrafo lo completa. Un párrafo de más de 300 palabras se corta en ventanas.
 4. Cada fragmento empieza con las últimas 50 palabras del anterior. Si al final quedan menos de 50 palabras nuevas, se suman al último fragmento en lugar de abrir uno casi repetido.
 
-**Calcular los vectores (`POST /vectores`):**
+**Mirar, borrar y rehacer:**
 
-1. El `Vectorizador` pide a `rag.Fragmento` los primeros 16 fragmentos sin vector (`Rag:LoteVectores`), en orden de número de fragmento.
-2. Le manda sus textos a Ollama en un solo pedido a `/api/embed`, sin instrucción, y recibe un vector de 1024 números por fragmento.
-3. Los guarda en `rag.Fragmento.Embedding`, en una transacción. El vector viaja como texto JSON con punto decimal y SQL Server lo convierte con `CAST(... AS VECTOR(1024))`.
-4. Si el lote falla, prueba sus fragmentos de a uno y anota los que fallan. Si Ollama no responde, corta: lo que falta queda para el próximo `/vectores`. También corta si fallan todos los fragmentos de cinco lotes seguidos, que es algo general y no un fragmento.
-5. Sigue con el lote siguiente, que empieza después del último fragmento visto: no relee lo ya hecho, y un fragmento que falla queda para el próximo `/vectores`.
-6. Pone Qdrant al día: sube los vectores nuevos y, si Qdrant estuvo apagado, también los que le faltaban de antes.
-7. Devuelve cuántos calculó, cuántos fallaron, cuántos quedan sin vector, cuántos fragmentos por segundo y el tiempo total.
+- `GET /documentos` devuelve cuántos documentos hay en cada estado, cuántos fragmentos, cuántos documentos por minuto se procesaron en los últimos 10 minutos, lo que falta, y una página de 50 documentos, de todos o de un estado.
+- `DELETE /documentos/{id}` borra los puntos de Qdrant del documento y después su fila; los fragmentos se van en cascada.
+- `POST /documentos/reintentar` pasa los que quedaron en `error` a `pendiente`.
+- `POST /documentos/reprocesar` borra la colección de Qdrant y todos los fragmentos, y deja todos los documentos `pendiente`: se rehace todo desde los PDF.
 
-**Poner Qdrant al día (`Sincronizador.PonerAlDiaAsync`, al final de `/indexar` y de `/vectores`):**
+La colección de Qdrant se crea sola antes de subir los primeros vectores, con vectores de 1024 números comparados por coseno y con dos umbrales bajos: `indexing_threshold` en 10 KB, para que Qdrant arme el índice HNSW enseguida, y `full_scan_threshold` en 10 KB, para que la búsqueda lo use.
 
-1. Si la colección `Qdrant:Coleccion` no existe, la crea.
-2. Lee los números de los fragmentos con vector en SQL y los ids de todos los puntos de Qdrant, recorriendo la colección de a 1.000.
-3. `Sincronizador.Comparar` arma las dos listas: los que faltan en Qdrant y los que sobran. Compara números, no cantidades.
-4. Compara el vector de una muestra de tres fragmentos que están en los dos lados. Si no coincide, la base se recreó y los números se repiten con otros textos: reconstruye la colección entera.
-5. Si no, borra los puntos que sobran y sube los vectores que faltan, de a 256, leídos de SQL.
-6. Si algo falla, lo anota como aviso en el detalle, con el tipo de error, y no falla: SQL ya quedó bien, y la próxima vez se pone al día.
+**Buscar (`GET /buscar?q=...&modo=...`):** `Buscador.ElegirModo` controla el modo; si no existe, la API devuelve un error 400. Solo se buscan los documentos `listo`.
 
-**Mirar y reconstruir Qdrant:**
-
-- `GET /qdrant/estado` hace la misma comparación sin cambiar nada, y muestra cuántos vectores tiene el índice HNSW (`indexed_vectors_count`).
-- `POST /qdrant/reconstruir` borra la colección, comprueba que se borró (en Windows, antes de la 1.20.1, a veces no se borraba), la vuelve a crear y le sube todos los vectores de SQL.
-
-La colección se crea con vectores de 1024 números comparados por coseno, y con dos umbrales bajos: `indexing_threshold` en 10 KB, para que Qdrant arme el índice HNSW enseguida, y `full_scan_threshold` en 10 KB, para que la búsqueda lo use. Con los valores por defecto, unos 2.500 vectores, Qdrant buscaría recorriendo todos los vectores, igual que SQL.
-
-**Buscar (`GET /buscar?q=...&modo=...`):** `Buscador.ElegirModo` controla el modo; si no existe, la API devuelve un error 400. Devuelve los fragmentos y un aviso, vacío salvo que la híbrida haya seguido sin Qdrant.
-
-- **Por palabras:** `FREETEXTTABLE` corta la pregunta en palabras, busca sus plurales y conjugaciones en el índice, puntúa cada fragmento y devuelve los 5 mejores.
-- **Por vectores, en SQL Server:** Ollama calcula el vector de la pregunta, con la instrucción en inglés de `Ollama:InstruccionPregunta` antes (`Instruct: ...` y `Query:` pegado a la pregunta). SQL Server ordena todos los fragmentos con vector por `VECTOR_DISTANCE('cosine', ...)` y devuelve los 5 más cercanos. Es una búsqueda exacta: recorre todos los vectores.
-- **Por vectores, en Qdrant (`vectores-qdrant`):** el mismo vector de la pregunta; Qdrant devuelve los números de los 5 fragmentos más cercanos usando el índice HNSW, y SQL Server sus textos, en ese orden. Si Qdrant no responde, o la colección está vacía, da error: este modo existe para medir Qdrant.
-- **Híbrida**, el modo por defecto: arranca las dos búsquedas al mismo tiempo, por palabras y por vectores en Qdrant, pidiendo 20 candidatos a cada una (`Rag:CandidatosHibrida`), y espera a las dos con `Task.WhenAll`: tarda lo que la más lenta, no la suma. Si Qdrant no responde, contesta con un error o no tiene vectores, la parte por vectores usa SQL con el mismo vector de la pregunta, y la respuesta lleva un aviso que dice cuál de las tres pasó. `Rrf.Mezclar` mezcla las dos listas por puesto: cada fragmento suma 1 / (60 + puesto) en cada lista donde aparece, y quedan los 5 de mayor puntaje.
+- **Por palabras (`palabras`):** `FREETEXTTABLE` corta la pregunta en palabras, busca sus plurales y conjugaciones en el índice, puntúa cada fragmento y devuelve los 5 mejores.
+- **Por significado (`vectores`):** Ollama calcula el vector de la pregunta, con la instrucción en inglés de `Ollama:InstruccionPregunta` antes. Qdrant devuelve los números de los 5 fragmentos más cercanos, y SQL Server sus textos, en ese orden.
+- **Híbrida (`hibrida`)**, el modo por defecto: arranca las dos búsquedas al mismo tiempo, pidiendo 20 candidatos a cada una (`Rag:CandidatosHibrida`), y espera a las dos con `Task.WhenAll`: tarda lo que la más lenta, no la suma. `Rrf.Mezclar` mezcla las dos listas por puesto: cada fragmento suma 1 / (60 + puesto) en cada lista donde aparece, y quedan los 5 de mayor puntaje.
 
 Se mezclan puestos y no puntajes porque el `RANK` del Full-Text y la distancia coseno miden cosas distintas, en escalas distintas: no se pueden sumar.
 
 **Preguntar (`POST /preguntar`):**
 
-1. Si el modo no existe, la API devuelve un error 400 con el motivo.
+1. `Validador.RevisarPregunta` controla la pregunta: vacía, más larga que `Rag:LargoMaximoPregunta`, con caracteres de control o sin letras ni números da un 400 con el motivo. Un modo que no existe, también.
 2. El `Redactor` busca los 5 mejores fragmentos con el modo pedido; sin modo, con la híbrida.
-3. Si no encontró ninguno, responde "No encontré esa información en los documentos." sin llamar al modelo. Por vectores y con la híbrida casi nunca pasa: siempre hay un fragmento más cercano que otro, y el "no sé" lo decide Qwen.
+3. Si no encontró ninguno, responde "No encontré esa información en los documentos." sin llamar al modelo.
 4. Si encontró, arma el mensaje: los fragmentos numerados `[1]` a `[5]` entre `<fragmentos>` y `</fragmentos>`, con los `<` y `>` del texto cambiados, y la pregunta al final.
-5. Se lo manda a Qwen con las cinco reglas como mensaje de sistema.
-6. Si Qwen respondió la frase de "no encontré", la devuelve sin fuentes. Si no, devuelve el texto con citas y las fuentes en el mismo orden. Si la búsqueda siguió sin Qdrant, agrega el aviso.
+5. Se lo manda al modelo de chat con las cinco reglas como mensaje de sistema.
+6. Si el modelo respondió la frase de "no encontré", la devuelve sin fuentes. Si no, devuelve el texto con citas y las fuentes en el mismo orden.
 7. Registra la consulta en `rag.Consulta`: la pregunta, el modo, los fragmentos, la respuesta y los tiempos. Si el registro falla, lo anota en el log y la respuesta sale igual.
 
-**Usar la página de la demo (`/`):**
+**Responder errores claros:**
 
-1. La página manda la pregunta y el modo elegido a `POST /preguntar`.
-2. Si la respuesta trae un aviso, lo muestra arriba.
-3. Muestra la respuesta y, debajo, las fuentes: las que el modelo citó con `[n]` en texto normal, y las que se le pasaron pero no citó, atenuadas.
-4. Si la respuesta es "no encontré", la API no manda fuentes y la página no muestra ese bloque.
-5. Muestra lo que tardó la búsqueda y lo que tardó el modelo. Si la API devuelve un error, lo muestra.
+1. Delante de los clientes de Ollama y de Qdrant hay un `DetectorDeCaidas`: si el servicio no responde, el error dice cuál y en qué dirección.
+2. Cualquier error que nadie atrapó lo atiende el `ManejadorDeErrores`: Ollama o Qdrant que no responden son 503; que respondieron con un error, 502; que tardaron demasiado, 504; cualquier error de SQL Server, 503; un pedido que no se pudo leer, 400; una subida demasiado grande, 413; y el resto, 500.
+3. Los errores salen en el formato estándar ProblemDetails (`application/problem+json`): `title`, `status` y `detail`. `UseStatusCodePages` le pone ese cuerpo también a los errores que salían vacíos: 404, 405 y 415. Las páginas muestran el título y el detalle.
 
-**Evaluar (`POST /evaluar`):**
+**Las páginas:**
 
-1. El `Evaluador` lee `examen.csv` (ruta `Rag:ArchivoExamen`). Si no existe o no tiene preguntas, lo avisa.
-2. Avisa si el examen nombra un PDF que no está cargado, espera hasta un minuto a que el Full-Text no tenga cambios pendientes y avisa si hay fragmentos sin vector.
-3. Revisa Qdrant: corta el examen si no responde, si la colección no existe o está vacía, o si sus vectores son de otra base, porque los modos que lo usan medirían otra cosa. Si solo le faltan o le sobran algunos fragmentos, lo avisa.
-4. En cada modo, `palabras`, `vectores`, `vectores-qdrant` e `hibrida`, cada pregunta con respuesta pasa por la búsqueda: se anota en qué puesto apareció un documento correcto, de 1 a 5, o 0 si no apareció.
-5. En cada modo, cada pregunta sin respuesta pasa por el `Redactor`: se cuenta si respondió la frase fija.
-6. Si en algún modo la híbrida tuvo que seguir sin Qdrant, lo avisa: esa fila no mide Qdrant. Si un modo falla a la mitad, lo avisa y sigue con los demás.
-7. Devuelve una fila por modo ("1er lugar", "entre los 5", ms promedio y preguntas sin respuesta bien contestadas), el detalle por pregunta, las fallas y los avisos.
+- `index.html`: manda la pregunta y el modo a `POST /preguntar`, y muestra la respuesta, las fuentes (las citadas con `[n]` en texto normal, las otras atenuadas) y lo que tardó cada parte.
+- `documentos.html`: la zona para soltar PDF, el botón de importar (prendido solo si `GET /info` dice que hay base de origen), los números del avance y la lista. Se actualiza sola: cada 5 segundos si hay pendientes, cada 30 si no.
+- `estado.js` dibuja la franja de estado de las dos, y `estilos.css` tiene lo común.
 
 ## 3. Tablas
 
-Base `RagBasico_F8`, esquema `rag`:
+Base de `Conexiones:SqlTextos` (en casa, `RagBasico_F9`), esquema `rag`. Todo `sql\base.sql` usa SQL que entiende un SQL Server 2014.
 
 | Tabla | Columna | Tipo | Para qué |
 |---|---|---|---|
-| `rag.Documento` | `DocumentoId` | `INT IDENTITY` | Número del documento, clave primaria |
-| `rag.Documento` | `Archivo` | `NVARCHAR(260)` | Nombre del PDF. Único |
-| `rag.Documento` | `Titulo` | `NVARCHAR(400)` | Nombre sin `.pdf`; va al principio de cada fragmento |
-| `rag.Documento` | `FechaCarga` | `DATETIME2` | Cuándo se cargó. Por defecto, la fecha del servidor |
-| `rag.Documento` | `Huella` | `VARBINARY(32)` | La huella de carga: sha256 de los bytes del PDF más los parámetros de corte. `NULL` si se cargó antes de `sql\03_huella.sql` |
+| `rag.Documento` | `DocumentoId` | `INT IDENTITY` | Número del documento, clave primaria. Va a Qdrant como dato extra de cada punto |
+| `rag.Documento` | `Archivo` | `NVARCHAR(260)` | Nombre del PDF. Único entre los arrastrados |
+| `rag.Documento` | `Titulo` | `NVARCHAR(400)` | Nombre sin `.pdf` |
+| `rag.Documento` | `OrigenId` | `NVARCHAR(100)` | El número del documento en la base de origen, si se importó. `NULL` si se arrastró. Único entre los importados |
+| `rag.Documento` | `Contenido` | `VARBINARY(MAX)` | Los bytes del PDF, solo si se arrastró. Los importados se leen de la base de origen |
+| `rag.Documento` | `Huella` | `VARBINARY(32)` | La huella de carga de los arrastrados: sha256 de los bytes más los parámetros de corte |
+| `rag.Documento` | `Estado` | `VARCHAR(20)` | `pendiente`, `listo`, `sin texto` o `error`. Por defecto, `pendiente` |
+| `rag.Documento` | `Detalle` | `NVARCHAR(1000)` | El motivo, si quedó en `error` o `sin texto`, o la duda sobre el texto si quedó `listo` |
+| `rag.Documento` | `FechaCarga` | `DATETIME2` | Cuándo se anotó. Por defecto, la fecha del servidor |
+| `rag.Documento` | `FechaProceso` | `DATETIME2` | Cuándo dejó de estar pendiente. Con esto se calcula la velocidad |
 | `rag.Fragmento` | `FragmentoId` | `INT IDENTITY` | Número del fragmento, clave primaria y clave del índice Full-Text. Es también el id de su punto en Qdrant |
-| `rag.Fragmento` | `DocumentoId` | `INT` | A qué documento pertenece. Si se borra el documento, se borra el fragmento (cascada). Va a Qdrant como dato extra del punto |
+| `rag.Fragmento` | `DocumentoId` | `INT` | A qué documento pertenece. Si se borra el documento, se borra el fragmento (cascada) |
 | `rag.Fragmento` | `Orden` | `INT` | Posición del fragmento dentro del documento, desde 1 |
 | `rag.Fragmento` | `Texto` | `NVARCHAR(MAX)` | El texto, que empieza con `Documento: <nombre>` |
-| `rag.Fragmento` | `Embedding` | `VECTOR(1024)` | El vector del texto, calculado por `qwen3-embedding:0.6b`. `NULL` hasta que corre `POST /vectores` |
 | `rag.Consulta` | `ConsultaId` | `INT IDENTITY` | Número de la consulta, clave primaria |
 | `rag.Consulta` | `Fecha` | `DATETIME2` | Cuándo se hizo. Por defecto, la fecha del servidor |
 | `rag.Consulta` | `Pregunta` | `NVARCHAR(2000)` | La pregunta, recortada a 2.000 caracteres |
-| `rag.Consulta` | `Modo` | `VARCHAR(20)` | El modo de búsqueda: `palabras`, `vectores`, `vectores-qdrant` o `hibrida` |
+| `rag.Consulta` | `Modo` | `VARCHAR(20)` | El modo de búsqueda: `palabras`, `vectores` o `hibrida` |
 | `rag.Consulta` | `FragmentosIds` | `NVARCHAR(400)` | Los números de los fragmentos que se le pasaron al modelo, separados por comas |
 | `rag.Consulta` | `Respuesta` | `NVARCHAR(MAX)` | Lo que respondió |
-| `rag.Consulta` | `MsBusqueda` | `INT` | Lo que tardó la búsqueda; por vectores, incluye calcular el vector de la pregunta |
+| `rag.Consulta` | `MsBusqueda` | `INT` | Lo que tardó la búsqueda; por significado, incluye calcular el vector de la pregunta |
 | `rag.Consulta` | `MsModelo` | `INT` | Lo que tardó el modelo, medido desde la API |
 | `rag.Consulta` | `MsCarga` | `INT` | Lo que tardó Ollama en cargar el modelo |
 | `rag.Consulta` | `MsLectura` | `INT` | Lo que tardó el modelo en leer los fragmentos y la pregunta |
 | `rag.Consulta` | `MsEscritura` | `INT` | Lo que tardó en escribir la respuesta |
 
-Índice Full-Text: catálogo `ftRag`, sin distinguir acentos, sobre `rag.Fragmento.Texto`, en español (3082), con la lista de palabras vacías del sistema y actualización automática. Los vectores de SQL no tienen índice: la búsqueda los recorre todos. El índice de vectores está en Qdrant.
+Índices: dos únicos con filtro en `rag.Documento` (`Archivo` entre los arrastrados, `OrigenId` entre los importados), uno por `Estado` para encontrar rápido el próximo pendiente, y uno por `DocumentoId` en `rag.Fragmento`.
 
-Colección de Qdrant `fragmentos_f8`: un punto por fragmento con vector. El id es `FragmentoId`, el vector son los mismos 1024 números de `Embedding` (normalizados), y el dato extra (payload) es `documentoId`.
+Índice Full-Text: catálogo `ftRag`, sin distinguir acentos, sobre `rag.Fragmento.Texto`, en español (3082), con la lista de palabras vacías del sistema y actualización automática.
+
+Colección de Qdrant (`Conexiones:ColeccionQdrant`): un punto por fragmento de un documento procesado. El id es `FragmentoId`, el vector son los 1024 números que calculó el modelo de embeddings, y el dato extra (payload) es `documentoId`.
+
+Base de origen, la de prueba que arma `scripts\crear-origen-de-prueba.ps1`: tabla `dbo.TABLA_DE_PDF` con `Id`, `Nombre` y `Contenido`. En la base real, la tabla y las columnas tienen otros nombres: se escriben en las dos consultas.
 
 ## 4. Configuración
 
-En `RagBasico.Api\appsettings.json`:
+En `RagBasico.Api\appsettings.json`. El bloque `Conexiones` es todo lo que conecta:
 
 | Clave | Valor | Para qué |
 |---|---|---|
+| `Conexiones:SqlTextos` | `Server=localhost\SQLEXPRESS;Database=RagBasico_F9;...` | La base del RAG: documentos, fragmentos, Full-Text y consultas |
+| `Conexiones:Qdrant` | `http://127.0.0.1:6333` | Dónde escucha Qdrant. Con `127.0.0.1` y no `localhost`, porque en casa Qdrant escucha solo en IPv4 |
+| `Conexiones:ColeccionQdrant` | `fragmentos_f9` | La colección donde van los vectores. "Reprocesar todo" borra esta colección y ninguna otra |
+| `Conexiones:ClaveQdrant` | vacío | La clave de Qdrant, si el servidor pide una. Va en el encabezado `api-key` de cada pedido |
+| `Conexiones:Ollama` | `http://127.0.0.1:11434` | Dónde escucha Ollama |
+| `Conexiones:ModeloChat` | `qwen3.5:4b` | El modelo que redacta las respuestas |
+| `Conexiones:ModeloEmbeddings` | `qwen3-embedding:0.6b` | El modelo que calcula los vectores. Tiene que dar vectores de 1024 números |
+| `Conexiones:SqlOrigen` | vacío | La base donde ya están guardados los PDF. Vacío: no hay importación |
+| `Conexiones:ConsultaLista` | `SELECT Id, Nombre FROM dbo.TABLA_DE_PDF` | Devuelve el número y el nombre de cada documento de la base de origen. Para probar con pocos, se le pone un `TOP` o un `WHERE` |
+| `Conexiones:ConsultaContenido` | `SELECT Contenido FROM dbo.TABLA_DE_PDF WHERE Id = @Id` | Devuelve el binario de un documento. `@Id` es su número |
+
+El resto no hace falta tocarlo para cambiar de servidor:
+
+| Clave | Valor | Para qué |
+|---|---|---|
+| `Rag:Proyecto` | `RAG básico` | El nombre del proyecto que devuelve `GET /info` |
+| `Rag:Fase` | `fase-9-local` | La fase de esta versión. La usan `GET /info` y `scripts\controlar-docs.ps1` |
+| `Rag:PalabrasPorFragmento` | `300` | El tamaño máximo de cada fragmento, en palabras. Entra en la huella |
+| `Rag:Solapamiento` | `50` | Cuántas palabras repite cada fragmento del anterior. También entra en la huella |
+| `Rag:TopK` | `5` | Cuántos fragmentos devuelve la búsqueda y se le pasan al modelo |
+| `Rag:LoteVectores` | `16` | Cuántos fragmentos se le mandan a Ollama en cada pedido de vectores |
+| `Rag:CandidatosHibrida` | `20` | Cuántos fragmentos le pide la híbrida a cada búsqueda antes de mezclarlos |
+| `Rag:LargoMaximoPregunta` | `500` | El largo máximo de una pregunta, en caracteres. Una más larga da un error 400 |
+| `Rag:MegasPorSubida` | `200` | El tope de una subida de PDF, en megas. Una más grande da un error 413 |
+| `Ollama:InstruccionPregunta` | `Given a question, retrieve relevant passages that answer the question` | La instrucción que va antes de cada pregunta al calcular su vector |
+| `Ollama:SegundosDeEspera` | `300` | Cuánto espera la API una respuesta de Ollama antes de cortar |
+| `Ollama:MantenerCargado` | `30m` | Cuánto tiempo deja Ollama cada modelo en memoria después del último pedido |
+| `Qdrant:SegundosDeEspera` | `10` | Cuánto espera la API a Qdrant |
 | `Logging:LogLevel:Default` | `Information` | Cuánto detalle escribe el log en la consola |
 | `Logging:LogLevel:Microsoft.AspNetCore` | `Warning` | Menos detalle para los mensajes internos de ASP.NET Core |
 | `Logging:LogLevel:System.Net.Http.HttpClient` | `Warning` | Sin cuatro líneas en la consola por cada pedido a Ollama y a Qdrant |
 | `AllowedHosts` | `*` | Qué nombres de servidor acepta la API: `*` es cualquiera |
-| `ConnectionStrings:Rag` | `Server=localhost\SQLEXPRESS;Database=RagBasico_F8;...` | La conexión con SQL Server: autenticación de Windows y confiar en el certificado de SQL Express |
-| `Rag:Proyecto` | `RAG básico` | El nombre del proyecto que devuelve `GET /info` |
-| `Rag:Fase` | `fase-8-validaciones` | La fase de esta versión. La usan `GET /info` y `scripts\controlar-docs.ps1` |
-| `Rag:CarpetaDocumentos` | vacío | La carpeta de los PDF. Se configura con la variable de entorno `Rag__CarpetaDocumentos` |
-| `Rag:PalabrasPorFragmento` | `300` | El tamaño máximo de cada fragmento, en palabras. Entra en la huella: si se cambia, el próximo `/indexar` recarga todos los PDF |
-| `Rag:Solapamiento` | `50` | Cuántas palabras repite cada fragmento del anterior. También entra en la huella |
-| `Rag:TopK` | `5` | Cuántos fragmentos devuelve la búsqueda y se le pasan al modelo |
-| `Rag:ArchivoExamen` | `..\examen.csv` | El examen, relativo a la carpeta del proyecto: `..` es la raíz del repo |
-| `Rag:LoteVectores` | `16` | Cuántos fragmentos manda `/vectores` a Ollama en cada pedido |
-| `Rag:CandidatosHibrida` | `20` | Cuántos fragmentos le pide la híbrida a cada búsqueda antes de mezclarlos. Más candidatos le dan a RRF más para elegir |
-| `Rag:LargoMaximoPregunta` | `500` | El largo máximo de una pregunta, en caracteres. Una más larga da un error 400 |
-| `Rag:ChequearAlArrancar` | `true` | Si la API controla la base y los modelos antes de arrancar. En `false`, arranca igual: sirve para mirar la página sin tener todo andando |
-| `Ollama:Url` | `http://127.0.0.1:11434` | Dónde escucha Ollama |
-| `Ollama:ModeloChat` | `qwen3.5:4b` | El modelo que redacta las respuestas |
-| `Ollama:ModeloEmbeddings` | `qwen3-embedding:0.6b` | El modelo que calcula los vectores. Tiene que dar vectores de 1024 números, como la columna `Embedding` y la colección de Qdrant |
-| `Ollama:InstruccionPregunta` | `Given a question, retrieve relevant passages that answer the question` | La instrucción que va antes de cada pregunta al calcular su vector. Cambiarla no obliga a recalcular los fragmentos |
-| `Ollama:SegundosDeEspera` | `300` | Cuánto espera la API una respuesta de Ollama antes de cortar |
-| `Ollama:MantenerCargado` | `30m` | Cuánto tiempo deja Ollama cada modelo en memoria después del último pedido |
-| `Qdrant:Url` | `http://127.0.0.1:6333` | Dónde escucha Qdrant. Con `127.0.0.1` y no `localhost`, porque Qdrant escucha solo en IPv4 |
-| `Qdrant:Coleccion` | `fragmentos_f8` | La colección de esta fase. Cada fase desde la 7 tiene la suya, como su base |
-| `Qdrant:SegundosDeEspera` | `10` | Cuánto espera la API a Qdrant. Es corto a propósito: si Qdrant no responde, la híbrida sigue con SQL |
 
 Fuera de `appsettings.json`:
 
 | Dónde | Qué | Para qué |
 |---|---|---|
-| Variable de entorno de usuario | `Rag__CarpetaDocumentos` | Pisa `Rag:CarpetaDocumentos` en todas las fases y carpetas. Se crea una vez y después hay que reabrir Visual Studio y las terminales |
-| `Properties\launchSettings.json` | `applicationUrl`: `http://127.0.0.1:5088` | Dirección y puerto. Cada fase usa el puerto `508N` |
+| `RagBasico.Api\conexiones.json` | Las líneas de `Conexiones` que cambian | Opcional. Si existe, sus líneas pisan a las de `appsettings.json`. Git lo ignora: ahí van los servidores y las claves que no se suben |
+| `Properties\launchSettings.json` | `applicationUrl`: `http://127.0.0.1:5089` | Dirección y puerto. La API escucha solo en esta PC |
 | `global.json` | `version`: `10.0.403`, `rollForward`: `latestPatch` | El SDK de .NET con el que se compila |
-| `scripts\iniciar-qdrant.ps1` | `QDRANT__SERVICE__HOST`, `QDRANT__STORAGE__STORAGE_PATH`, `QDRANT__STORAGE__SNAPSHOTS_PATH` y `QDRANT__TELEMETRY_DISABLED` | La configuración de Qdrant, con variables de entorno que valen solo para su proceso: solo `127.0.0.1`, carpetas de datos fijas y sin telemetría |
+| `scripts\iniciar-qdrant.ps1` | `QDRANT__SERVICE__HOST`, `QDRANT__STORAGE__STORAGE_PATH`, `QDRANT__STORAGE__SNAPSHOTS_PATH` y `QDRANT__TELEMETRY_DISABLED` | La configuración del Qdrant de casa, con variables de entorno que valen solo para su proceso |
 
 ## 5. Fuera del repo
 
@@ -202,10 +212,10 @@ Cómo instalar cada pieza y comprobar que anda: [`docs\instalacion.md`](instalac
 
 | Qué | Dónde | Desde |
 |---|---|---|
-| Una carpeta por fase, creada por `scripts\crear-worktrees.ps1` | Al lado del repo: `..\RAG-BASICO-fases\` | fase-0-base |
 | Ollama y el modelo `qwen3.5:4b` | Instalados en la PC; Ollama escucha en `127.0.0.1:11434` | fase-1-ollama |
-| SQL Server 2025 Express, con Full-Text | Instancia `localhost\SQLEXPRESS`, base `RagBasico_F8` | fase-2-rag-minimo |
-| Los PDF | La carpeta de la variable `Rag__CarpetaDocumentos`, por ejemplo `..\RAG-BASICO-datos\documentos\` | fase-2-rag-minimo |
-| Una carpeta de PDF de prueba, con su base y su colección, para probar el borrado sin tocar las del examen | `..\RAG-BASICO-datos\documentos-prueba\`, una base aparte y, desde la fase 7, la colección `fragmentos_prueba`, elegidas solo en una consola con `$env:Rag__CarpetaDocumentos`, `$env:ConnectionStrings__Rag` y `$env:Qdrant__Coleccion`. Sin la colección aparte, la base de prueba le borraría a Qdrant los vectores del examen | fase-4-carga |
+| SQL Server, con Full-Text | Instancia `localhost\SQLEXPRESS`, base `RagBasico_F9` | fase-2-rag-minimo |
 | El modelo `qwen3-embedding:0.6b` | En Ollama: `ollama pull qwen3-embedding:0.6b` | fase-5-vectores |
-| Qdrant 1.20.2 y sus datos | `qdrant.exe` en `..\RAG-BASICO-datos\qdrant\`, datos en su subcarpeta `storage`. Una sola instancia para todas las fases, con una colección por fase | fase-7-qdrant |
+| Qdrant 1.20.2 y sus datos | `qdrant.exe` en `..\RAG-BASICO-datos\qdrant\`, datos en su subcarpeta `storage` | fase-7-qdrant |
+| Los PDF de prueba | Cualquier carpeta, por ejemplo `..\RAG-BASICO-datos\documentos\`: se arrastran a la página. Ya no hay una carpeta configurada | fase-9-local |
+| La base de origen de prueba | Base `RagBasico_Origen`, creada por `scripts\crear-origen-de-prueba.ps1` | fase-9-local |
+| Las conexiones a otros servidores | `RagBasico.Api\conexiones.json`, que git ignora | fase-9-local |

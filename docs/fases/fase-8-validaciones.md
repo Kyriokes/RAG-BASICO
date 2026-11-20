@@ -4,7 +4,7 @@
 
 Que la API responda con claridad cuando algo está mal, en lugar de un error 500 genérico: una pregunta vacía o demasiado larga da un 400 que dice el motivo, un servicio caído da un 503 que dice cuál, y si falta la base o un modelo, la API ni arranca y dice por qué.
 
-Esta fase va por delante de `main`: `main` se queda en la fase 7, que es la que se presenta, hasta que se decida presentar esta.
+Cuando se hizo, esta fase iba por delante de `main`, que estaba en la fase 7. Desde la fase 9, `main` es la fase 9.
 
 ## 2. Qué cambió
 

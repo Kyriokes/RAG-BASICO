@@ -1,20 +1,21 @@
 # RAG-BASICO
 
-Un prototipo de RAG (búsqueda en documentos y respuesta redactada por un modelo de lenguaje), armado por fases con .NET 10, SQL Server 2025 Express, Qdrant y Ollama.
+Un prototipo de RAG (búsqueda en documentos y respuesta redactada por un modelo de lenguaje), armado por fases con .NET 10, SQL Server, Qdrant y Ollama.
 
 Cada fase agrega una pieza y queda marcada con su branch, así el proyecto se puede recorrer de la versión más chica a la final.
 
-**Esta es la fase 8: validaciones, por delante de `main`.** Sobre la versión que se presenta (la fase 7, que es `main`), la API valida la pregunta y responde cada error con claridad: un 400 con el motivo si la pregunta no sirve, un 503 que dice qué servicio no responde, y si falta la base o un modelo, no arranca y dice por qué.
+**Esta es la fase 9: la versión final, corriendo toda en una PC.** Hace lo mismo que la fase 8 (pregunta, busca y responde citando) con menos código y con cada dato en un solo lugar: los PDF, los párrafos y la búsqueda por palabras en SQL Server; los vectores solo en Qdrant; los modelos en Ollama. Todo lo que conecta está en un solo bloque, `Conexiones`, de `RagBasico.Api\appsettings.json`. Los PDF se cargan arrastrándolos a la página o importándolos de otra base, y se procesan solos en segundo plano. Se arranca con doble clic en `iniciar.cmd`.
+
+Para entender el código archivo por archivo: [docs/manual.md](docs/manual.md).
 
 ## Requisitos de esta fase
 
 - SDK de .NET 10. En la carpeta del repo, `dotnet --version` tiene que decir 10.0.403 o un parche más nuevo de 10.0.4xx (lo fija `global.json`).
-- SQL Server 2025 Express con Full-Text, instancia `SQLEXPRESS`, y sqlcmd (`winget install Microsoft.Sqlcmd`).
+- SQL Server con Full-Text, instancia `SQLEXPRESS`, y sqlcmd (`winget install Microsoft.Sqlcmd`) para crear la base. Ya no hace falta que sea la versión 2025: la base no guarda vectores.
 - Ollama corriendo, con los modelos `qwen3.5:4b` y `qwen3-embedding:0.6b`.
-- Qdrant 1.20.2 en `..\RAG-BASICO-datos\qdrant\`, arrancado con `scripts\iniciar-qdrant.ps1`.
-- Los PDF en una carpeta, y la variable de entorno de usuario `Rag__CarpetaDocumentos` apuntando a ella.
+- Qdrant 1.20.2 en `..\RAG-BASICO-datos\qdrant\`. Lo arranca `iniciar.cmd`.
 - Windows PowerShell 5.1 y git 2.31 o posterior, para los scripts.
-- Para probar los pedidos del archivo `.http`: Visual Studio, o VS Code con la extensión "REST Client".
+- Para probar los pedidos del archivo `.http`: Visual Studio, o VS Code con la extensión "REST Client". No hace falta para usar las páginas.
 
 Cómo instalar cada cosa, en qué orden y cómo comprobar que anda: [docs/instalacion.md](docs/instalacion.md).
 
@@ -22,25 +23,38 @@ Cómo instalar cada cosa, en qué orden y cómo comprobar que anda: [docs/instal
 
 SQL Server tiene que estar andando. Si su servicio arranca a mano, como administrador: `Start-Service 'MSSQL$SQLEXPRESS'`.
 
-Desde la raíz del repo, una sola vez:
+Una sola vez, desde la raíz del repo, se crea la base:
 
 ```powershell
-[Environment]::SetEnvironmentVariable('Rag__CarpetaDocumentos', 'F:\RAG-BASICO-datos\documentos', 'User')
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1
 ```
 
-Después de crear la variable, cerrá y volvé a abrir Visual Studio, VS Code (todas sus ventanas) y las consolas: los que estaban abiertos no la ven. Para arrancar la API:
+Después, cada vez: **doble clic en `iniciar.cmd`**. Arranca Qdrant si no está andando, arranca la API y abre el navegador en `http://127.0.0.1:5089/`. Se frena con Ctrl+C en esa ventana.
+
+Hay dos páginas:
+
+- **Preguntar** (`/`): la pregunta, el modo de búsqueda y la respuesta con sus fuentes.
+- **Documentos** (`/documentos.html`): se arrastran los PDF, se ve cuántos están listos y cuántos faltan, y se borran o se vuelven a procesar.
+
+Arriba de las dos hay una franja con un punto por cada pieza (SQL Server, Full-Text, los modelos, Qdrant): verde si anda, amarillo si anda a medias y rojo si no anda, con lo que hay que hacer.
+
+Un PDF arrastrado queda `pendiente` y se procesa solo: se le saca el texto, se corta en fragmentos, se calculan sus vectores y se suben a Qdrant. Cuando queda `listo`, ya se le puede preguntar. Un PDF escaneado queda como `sin texto`, y uno roto, como `error`, con el motivo.
+
+### Importar de otra base
+
+Si los PDF ya están guardados en binario en otra base de SQL Server, no hace falta arrastrarlos. En `Conexiones` van la cadena de esa base (`SqlOrigen`) y dos consultas: `ConsultaLista`, que devuelve el número y el nombre de cada documento, y `ConsultaContenido`, que devuelve el binario de uno. El botón "Importar de la base de origen" los anota a todos como pendientes y se procesan igual que los arrastrados. Los PDF importados no se copian: se leen de esa base cuando se procesan.
+
+Para probarlo sin esa base, este script arma una de prueba con los PDF de una carpeta, y dice qué poner en la configuración:
 
 ```powershell
-cd RagBasico.Api
-dotnet run
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-origen-de-prueba.ps1
 ```
 
-Antes, en otra consola, arrancá Qdrant: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\iniciar-qdrant.ps1`. La página de la demo está en `http://127.0.0.1:5088/` (con F5 en Visual Studio se abre sola; con `dotnet run`, abrila a mano), y `GET /salud` dice si anda todo. Antes de preguntar, mandá los pedidos de `RagBasico.Api\RagBasico.Api.http` en orden: `POST /indexar` pone la base al día con la carpeta (la segunda vez seguida dice `SIN CAMBIOS`), `POST /vectores` calcula los vectores y los sube a Qdrant, `GET /buscar` muestra los fragmentos que encuentra en cada modo, `POST /preguntar` responde con citas y `POST /evaluar` corre el examen.
+### Otros servidores
 
-El examen va en `examen.csv`, con el formato de `examen.ejemplo.csv`. Para congelar los PDF del examen: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-manifiesto.ps1`.
+Para conectar la API a servidores de otra máquina no se toca el código ni `appsettings.json`: se crea `RagBasico.Api\conexiones.json` con las líneas de `Conexiones` que cambian. Git ignora ese archivo, así los nombres de los servidores y las claves no se suben.
 
-Si en la carpeta hay PDF escaneados o que no se pudieron abrir, `POST /indexar` los vuelve a informar en cada carga (`SIN TEXTO` o `ERROR`), así que la segunda vez no dice `SIN CAMBIOS`: alcanza con que `Cargados` y `Borrados` den 0.
+### Controlar la documentación
 
 Para controlar que la documentación coincida con el código, desde la raíz del repo:
 
@@ -60,26 +74,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\controlar-docs.ps1
 | 5 | `fase-5-vectores` | Vectores en SQL Server, búsqueda por significado con `VECTOR_DISTANCE` y el examen en los dos modos | 5085 | `RagBasico_F5` | "entre los 5" por vectores contra palabras: pendiente | [fase-5-vectores.md](docs/fases/fase-5-vectores.md) |
 | 6 | `fase-6-hibrida` | Búsqueda híbrida con RRF, las dos búsquedas en paralelo y la página de la demo | 5086 | `RagBasico_F6` | "entre los 5" de los tres modos: pendiente | [fase-6-hibrida.md](docs/fases/fase-6-hibrida.md) |
 | 7 | `fase-7-qdrant` | Qdrant como índice de vectores, sincronizado con SQL y con respaldo si se apaga; `/salud` y los modelos cargados al arrancar. Acá queda `main` | 5087 | `RagBasico_F7` | "entre los 5" de `vectores-qdrant` contra `vectores`: pendiente | [fase-7-qdrant.md](docs/fases/fase-7-qdrant.md) |
-| 8 | `fase-8-validaciones` | Validación de la pregunta, errores claros en formato ProblemDetails y chequeos al arrancar. Por delante de `main` | 5088 | `RagBasico_F8` | ninguno nuevo | [fase-8-validaciones.md](docs/fases/fase-8-validaciones.md) |
+| 8 | `fase-8-validaciones` | Validación de la pregunta, errores claros en formato ProblemDetails y chequeos al arrancar | 5088 | `RagBasico_F8` | ninguno nuevo | [fase-8-validaciones.md](docs/fases/fase-8-validaciones.md) |
+| 9 | `fase-9-local` | Cada dato en un solo lugar: vectores solo en Qdrant, toda la conexión en el bloque `Conexiones`, carga de PDF por la página o desde otra base, en segundo plano, y arranque con doble clic. Se van el examen y la carpeta de PDF | 5089 | `RagBasico_F9` | fragmentos por segundo al cargar: entre 6 y 13 | [fase-9-local.md](docs/fases/fase-9-local.md) |
 
-Para ver qué agregó una fase: `git diff fase-7-qdrant fase-8-validaciones`, o la página "compare" de GitHub entre las dos branches. En un clon nuevo, primero hay que traer las branches de fase: está en [docs/worktrees.md](docs/worktrees.md).
-
-## Cómo recorrer las fases
-
-Cada fase se puede abrir en su propia carpeta, sin cambiar de branch. Desde la raíz del repo:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-worktrees.ps1
-```
-
-El paso a paso, también para un clon nuevo, está en [docs/worktrees.md](docs/worktrees.md).
+Para ver qué agregó una fase: `git diff fase-8-validaciones fase-9-local`, o la página "compare" de GitHub entre las dos branches. Las fases anteriores siguen en sus branches: `git switch fase-8-validaciones` abre la fase 8, con su propia documentación.
 
 ## Documentación
 
+- [docs/manual.md](docs/manual.md): el manual de lectura. Recorre los archivos en el orden en que conviene leerlos, siguiendo un PDF y una pregunta de punta a punta.
 - [docs/instalacion.md](docs/instalacion.md): qué instalar, en qué orden, cómo comprobar que anda y qué hacer si algo falla.
 - [docs/arquitectura.md](docs/arquitectura.md): las piezas, los recorridos, las tablas y la configuración de esta versión.
 - [docs/responsabilidades.md](docs/responsabilidades.md): qué hace cada archivo, clase, función y endpoint.
-- [docs/worktrees.md](docs/worktrees.md): cómo abrir y correr cada fase en su carpeta.
 - [docs/fases/](docs/fases/): un documento por fase, con lo que cambió, el orden de lectura y los resultados.
 
 ## Erratas

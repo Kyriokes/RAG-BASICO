@@ -1,22 +1,33 @@
 -- consultas-utiles.sql: consultas para mirar la base desde SSMS.
--- No crea nada y scripts\crear-base.ps1 no la corre. Antes de usarla, elegí la base de la fase (por ejemplo RagBasico_F2).
+-- No crea nada y scripts\crear-base.ps1 no la corre. Antes de usarla, elegí la base del RAG (en casa, RagBasico_F9).
 
--- Cuántos documentos y fragmentos hay, y el largo promedio de un fragmento.
-SELECT COUNT(*) AS Documentos FROM rag.Documento;
+-- Cuántos documentos hay en cada estado: pendiente, listo, sin texto o error.
+SELECT Estado, COUNT(*) AS Documentos FROM rag.Documento GROUP BY Estado;
+
+-- Cuántos fragmentos hay, y el largo promedio de un fragmento.
 SELECT COUNT(*) AS Fragmentos, AVG(LEN(Texto)) AS CaracteresPromedio FROM rag.Fragmento;
 
 -- Tres fragmentos al azar: ¿el texto se entiende, o sale con palabras pegadas o columnas mezcladas?
 SELECT TOP (3) Texto FROM rag.Fragmento ORDER BY NEWID();
 
--- Cada documento con su huella de carga y cuántos fragmentos tiene. Sin huella (NULL): se cargó antes de
--- sql\03_huella.sql, y el próximo /indexar lo recarga.
-SELECT d.Archivo, CONVERT(VARCHAR(64), d.Huella, 2) AS Huella, d.FechaCarga, COUNT(f.FragmentoId) AS Fragmentos
+-- Cada documento con su estado, de dónde vino y cuántos fragmentos tiene. Los 100 más nuevos.
+-- OrigenId con un número: se importó de la base de origen. En NULL: se arrastró a la página.
+SELECT TOP (100) d.DocumentoId, d.Archivo, d.OrigenId, d.Estado, d.Detalle, d.FechaCarga, d.FechaProceso,
+       (SELECT COUNT(*) FROM rag.Fragmento AS f WHERE f.DocumentoId = d.DocumentoId) AS Fragmentos,
+       DATALENGTH(d.Contenido) / 1024 AS KbGuardados
 FROM rag.Documento AS d
-LEFT JOIN rag.Fragmento AS f ON f.DocumentoId = d.DocumentoId
-GROUP BY d.Archivo, d.Huella, d.FechaCarga
-ORDER BY d.Archivo;
+ORDER BY d.DocumentoId DESC;
 
--- Los fragmentos de un documento, en orden: para revisar un PDF que /indexar marcó con TEXTO DUDOSO.
+-- Los documentos que no se pudieron cargar, con el motivo.
+SELECT DocumentoId, Archivo, OrigenId, Estado, Detalle
+FROM rag.Documento
+WHERE Estado IN ('error', 'sin texto')
+ORDER BY DocumentoId;
+
+-- Los documentos que quedaron listos con el texto dudoso: conviene mirar sus fragmentos.
+SELECT DocumentoId, Archivo, Detalle FROM rag.Documento WHERE Estado = 'listo' AND Detalle IS NOT NULL;
+
+-- Los fragmentos de un documento, en orden: para revisar un PDF con el texto dudoso.
 SELECT f.Orden, LEN(f.Texto) AS Caracteres, f.Texto
 FROM rag.Fragmento AS f
 JOIN rag.Documento AS d ON d.DocumentoId = f.DocumentoId
@@ -39,34 +50,17 @@ SELECT TOP (5) ft.[RANK], d.Archivo, LEFT(f.Texto, 150) AS Inicio
 FROM FREETEXTTABLE(rag.Fragmento, Texto, N'requisitos reintegro', LANGUAGE 3082) AS ft
 JOIN rag.Fragmento AS f ON f.FragmentoId = ft.[KEY]
 JOIN rag.Documento AS d ON d.DocumentoId = f.DocumentoId
+WHERE d.Estado = 'listo'
 ORDER BY ft.[RANK] DESC;
 
 -- Qué palabras busca el Full-Text a partir de una: plurales y conjugaciones, no derivadas.
 SELECT display_term, expansion_type
 FROM sys.dm_fts_parser(N'FORMSOF(FREETEXT, cancelo)', 3082, 0, 0);
 
--- Cuántos fragmentos tienen vector y cuántos faltan. Faltan: correr POST /vectores.
-SELECT COUNT(*) AS Fragmentos,
-       SUM(CASE WHEN Embedding IS NULL THEN 0 ELSE 1 END) AS ConVector
-FROM rag.Fragmento;
+-- Cuánto ocupa la base. Express admite 50 GB por base (10 GB antes de la versión 2025).
+EXEC sp_spaceused;
 
--- Los 5 vecinos más cercanos de un fragmento: tendrían que ser del mismo tema. El primero es él mismo, con distancia 0.
--- Toma el primer fragmento con vector que exista, no el número 1, que puede no existir después de recargar.
-DECLARE @id INT = (SELECT MIN(FragmentoId) FROM rag.Fragmento WHERE Embedding IS NOT NULL);
-DECLARE @vector VECTOR(1024) = (SELECT Embedding FROM rag.Fragmento WHERE FragmentoId = @id);
-SELECT TOP (6) f.FragmentoId, d.Archivo, VECTOR_DISTANCE('cosine', f.Embedding, @vector) AS Distancia, LEFT(f.Texto, 150) AS Inicio
-FROM rag.Fragmento AS f
-JOIN rag.Documento AS d ON d.DocumentoId = f.DocumentoId
-WHERE f.Embedding IS NOT NULL
-ORDER BY Distancia;
-
--- Cuánto tarda SQL Server en recorrer todos los vectores: es una búsqueda exacta, sin índice.
--- El tiempo sale en la pestaña Messages ("CPU time" y "elapsed time").
-DECLARE @id2 INT = (SELECT MIN(FragmentoId) FROM rag.Fragmento WHERE Embedding IS NOT NULL);
-DECLARE @vector2 VECTOR(1024) = (SELECT Embedding FROM rag.Fragmento WHERE FragmentoId = @id2);
-SET STATISTICS TIME ON;
-SELECT TOP (5) f.FragmentoId
-FROM rag.Fragmento AS f
-WHERE f.Embedding IS NOT NULL
-ORDER BY VECTOR_DISTANCE('cosine', f.Embedding, @vector2);
-SET STATISTICS TIME OFF;
+-- Las últimas 20 preguntas, con lo que tardó cada parte.
+SELECT TOP (20) Fecha, Modo, Pregunta, LEFT(Respuesta, 150) AS Respuesta, MsBusqueda, MsModelo
+FROM rag.Consulta
+ORDER BY ConsultaId DESC;

@@ -1,6 +1,6 @@
 # Instalación
 
-Qué hay que instalar en Windows para correr todas las fases, en el orden en que las fases lo van necesitando, cómo comprobar que cada pieza anda y qué hacer si algo falla. Todo corre en la misma PC.
+Qué hay que instalar en Windows para correr esta versión en una sola PC, cómo comprobar que cada pieza anda y qué hacer si algo falla. La columna "Desde" dice desde qué fase hace falta cada cosa, para quien abra una branch anterior.
 
 Los comandos son para Windows PowerShell. Los que dicen "como administrador" van en una consola abierta como administrador: en el menú Inicio, buscá "Windows PowerShell", hacé clic derecho y elegí "Ejecutar como administrador".
 
@@ -20,14 +20,13 @@ Esta guía usa el repo en `F:\RAG-BASICO\` y, al lado, la carpeta de datos `F:\R
 | Un editor | Visual Studio 2026, o VS Code con la extensión REST Client | fase-0-base | Leer el código y mandar los pedidos del `.http` | Visual Studio abre `RagBasico.slnx`; en VS Code, el `.http` muestra "Send Request" arriba de cada pedido |
 | Ollama | 0.30 o posterior: `qwen3.5:4b` no se baja con una más vieja | fase-1-ollama | Correr los modelos | `http://127.0.0.1:11434` dice "Ollama is running" |
 | El modelo `qwen3.5:4b` | | fase-1-ollama | Redactar las respuestas | `ollama list` |
-| SQL Server 2025 Express, con Full-Text | | fase-2-rag-minimo | La base: los textos, los vectores y el índice de palabras | Una consulta con `sqlcmd` (punto 6) |
+| SQL Server 2025 Express, con Full-Text | | fase-2-rag-minimo | La base: los documentos, los textos y el índice de palabras. Desde la fase 9 no guarda vectores, así que sirve también una versión anterior con Full-Text | Una consulta con `sqlcmd` (punto 6) |
 | sqlcmd | 1.10 o posterior | fase-2-rag-minimo | Lo usa `scripts\crear-base.ps1` para crear la base | `sqlcmd --version` |
 | SSMS | 21 o posterior | fase-2-rag-minimo | Mirar la base y correr `sql\consultas-utiles.sql`. Opcional | Se conecta a `localhost\SQLEXPRESS` |
-| La carpeta de los PDF | | fase-2-rag-minimo | Los documentos públicos que se cargan | `$env:Rag__CarpetaDocumentos`, en una consola nueva |
 | El modelo `qwen3-embedding:0.6b` | | fase-5-vectores | Calcular los vectores | `ollama list` |
 | Qdrant | 1.20.2 | fase-7-qdrant | El índice de vectores | `http://127.0.0.1:6333` dice `"version":"1.20.2"` |
 
-Para correr una fase vieja alcanza con lo de las filas hasta esa fase.
+Para correr una fase vieja alcanza con lo de las filas hasta esa fase. Las fases 2 a 8 leen los PDF de una carpeta y tienen su propia guía, en `docs\instalacion.md` de esas branches. Desde la fase 9 los PDF se arrastran a la página.
 
 ## 1. git y el repo
 
@@ -53,36 +52,16 @@ Visual Studio 2026 instala su propio SDK, que cambia con cada actualización: la
 
 ## 3. El editor
 
-Hace falta uno de los dos para mandar los pedidos del `.http`, que usan los pasos de prueba de cada fase y la preparación de la primera vez (`POST /indexar`, `POST /vectores`).
+Para usar el proyecto alcanza con el navegador: las dos páginas hacen todo. El editor sirve para leer el código y para mandar los pedidos de `RagBasico.Api\RagBasico.Api.http` uno por uno.
 
 - **Visual Studio 2026** (la edición Community alcanza), con la carga de trabajo "ASP.NET y desarrollo web". Abre `RagBasico.slnx`, corre la API con F5 y manda los pedidos del `.http` sin extensiones: cada pedido tiene arriba un link "Send Request". Visual Studio 2022 no sirve: no puede usar el SDK de .NET 10.
-- **VS Code**, con la extensión "REST Client" (`humao.rest-client`) para el `.http`, y la API corriendo con `dotnet run` en una consola.
+- **VS Code**, con la extensión "REST Client" (`humao.rest-client`) para el `.http`, y la API corriendo con `iniciar.cmd`.
 
-Sin editor, la API corre igual con `dotnet run`, y los pedidos se mandan desde el navegador o desde PowerShell, en otra consola (la de `dotnet run` queda ocupada), con el puerto de la fase: `508N`, por ejemplo 5087 en la fase 7. Los `GET`, como `GET /salud`, se abren en el navegador: `http://127.0.0.1:5087/salud`. Los `POST` sin cuerpo, como `POST /indexar` o `POST /vectores`, se mandan así: la segunda línea muestra los totales (`cargados` y `borrados`, o `pendientes` y `fragmentosPorSegundo`), con el detalle cortado en los primeros cuatro, y la tercera, el detalle entero:
-
-```powershell
-$r = Invoke-RestMethod -Method Post http://127.0.0.1:5087/indexar
-$r
-$r.detalle
-```
-
-`POST /evaluar` devuelve otras partes: los avisos (si el examen se cortó, ahí dice por qué), la tabla por modo, las fallas y el detalle por pregunta:
+Sin editor, los `GET` se abren en el navegador, por ejemplo `http://127.0.0.1:5089/salud` o `http://127.0.0.1:5089/documentos`. Una pregunta se manda desde PowerShell, en otra consola. Lleva JSON, y en Windows PowerShell 5.1 hay que decir que va en UTF-8, o las tildes llegan mal:
 
 ```powershell
-$r = Invoke-RestMethod -Method Post http://127.0.0.1:5087/evaluar
-$r.avisos
-$r.resultados | Format-Table
-$r.fallas
-$r.detalle
+Invoke-RestMethod -Method Post http://127.0.0.1:5089/preguntar -ContentType 'application/json; charset=utf-8' -Body '{"pregunta":"¿Qué requisitos hay para pedir el reintegro?"}'
 ```
-
-Una pregunta lleva JSON, y en Windows PowerShell 5.1 hay que decir que va en UTF-8, o las tildes llegan mal:
-
-```powershell
-Invoke-RestMethod -Method Post http://127.0.0.1:5087/preguntar -ContentType 'application/json; charset=utf-8' -Body '{"pregunta":"¿Qué requisitos hay para pedir el reintegro?"}'
-```
-
-Desde la fase 6, la página de la demo también pregunta, pero no manda los otros pedidos.
 
 ## 4. Ollama y los modelos
 
@@ -96,7 +75,7 @@ Desde la fase 6, la página de la demo también pregunta, pero no manda los otro
    ollama pull qwen3-embedding:0.6b
    ```
 
-   Son unos 3,3 GB y 640 MB, y quedan en `%USERPROFILE%\.ollama\models`. El primero hace falta desde la fase 1; el segundo, desde la 5.
+   Son unos 3,3 GB y 640 MB, y quedan en `%USERPROFILE%\.ollama\models`.
 5. Comprobá: `ollama list` muestra los dos.
 
 Si Ollama no está corriendo (`http://127.0.0.1:11434` no responde), abrilo desde el menú Inicio: "Ollama". Para cerrarlo: clic en su ícono de la bandeja, "Quit Ollama".
@@ -124,7 +103,7 @@ Get-Service 'MSSQL$SQLEXPRESS' | Select-Object Status, StartType
 
 Si `StartType` dice `Manual`, hay que arrancarlo cada vez, como administrador: `Start-Service 'MSSQL$SQLEXPRESS'`. Para que arranque solo con Windows, una sola vez, como administrador: `Set-Service 'MSSQL$SQLEXPRESS' -StartupType Automatic`. Van con comillas simples: entre comillas dobles, PowerShell toma `$SQLEXPRESS` como una variable.
 
-Express alcanza de sobra para el prototipo: hasta 50 GB por base, 1.410 MB de memoria para los datos y 4 núcleos. Trae el tipo `VECTOR` y `VECTOR_DISTANCE`, que usa la búsqueda por significado desde la fase 5.
+Express alcanza para el prototipo: hasta 50 GB por base (10 GB en las versiones anteriores a la 2025), 1.410 MB de memoria para los datos y 4 núcleos. Los PDF que se arrastran a la página se guardan adentro de la base: con muchos, hay que mirar ese tope.
 
 ## 6. sqlcmd y SSMS
 
@@ -138,26 +117,21 @@ Express alcanza de sobra para el prototipo: hasta 50 GB por base, 1.410 MB de me
 
    Tiene que mostrar "Microsoft SQL Server 2025" con "Express Edition", y un `1`. Si da `0`, falta el Full-Text (punto 5).
 
-`-E` es la autenticación de Windows, `-C` confía en el certificado que SQL Express se crea solo, y `lpc:` conecta por memoria compartida, la conexión local de SQL Server. Sin `lpc:`, este sqlcmd le pregunta primero por la instancia al servicio SQL Server Browser, y si ese servicio no está andando, lo espera hasta agotar el tiempo y falla aunque SQL Server esté andando. Desde la fase 7, `scripts\crear-base.ps1` le agrega `lpc:` por su cuenta. En las fases 2 a 6 no lo hace, así que pasale el servidor, parado en la carpeta de la fase:
+`-E` es la autenticación de Windows, `-C` confía en el certificado que SQL Express se crea solo, y `lpc:` conecta por memoria compartida, la conexión local de SQL Server. Sin `lpc:`, este sqlcmd le pregunta primero por la instancia al servicio SQL Server Browser, y si ese servicio no está andando, lo espera hasta agotar el tiempo y falla aunque SQL Server esté andando. `scripts\crear-base.ps1` le agrega `lpc:` por su cuenta.
+
+SSMS es opcional: sirve para mirar la base y correr `sql\consultas-utiles.sql`. Se baja de https://learn.microsoft.com/ssms/install/install. Para conectarte: servidor `localhost\SQLEXPRESS`, autenticación de Windows y "Trust server certificate" marcado.
+
+## 7. La base del RAG
+
+Con el servicio de SQL Server andando, parado en la carpeta del repo, una sola vez:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1 -Servidor 'lpc:localhost\SQLEXPRESS'
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1
 ```
 
-SSMS es opcional: sirve para mirar la base y correr `sql\consultas-utiles.sql`. Hace falta la 21 o posterior, que entiende el tipo `VECTOR`; se baja de https://learn.microsoft.com/ssms/install/install. Para conectarte: servidor `localhost\SQLEXPRESS`, autenticación de Windows y "Trust server certificate" marcado.
+Crea la base `RagBasico_F9` (la de `Conexiones:SqlTextos`, en `RagBasico.Api\appsettings.json`) con sus tres tablas y el índice Full-Text. Se puede correr de nuevo sin romper nada.
 
-## 7. La carpeta de los PDF
-
-1. Juntá los PDF públicos que se van a cargar en una carpeta, por ejemplo `F:\RAG-BASICO-datos\documentos\`, al lado del repo. Tienen que tener texto seleccionable: los escaneados no se pueden leer, y la carga los informa como `SIN TEXTO`.
-2. La API toma la carpeta de la variable de entorno de usuario `Rag__CarpetaDocumentos`, con la ruta completa. Se crea una sola vez:
-
-   ```powershell
-   [Environment]::SetEnvironmentVariable('Rag__CarpetaDocumentos', 'F:\RAG-BASICO-datos\documentos', 'User')
-   ```
-
-   Si tu carpeta está en otro lado, poné su ruta completa. El comando no controla que exista: si te equivocás, la API avisa al arrancar `No existe la carpeta de PDF`.
-3. Cerrá y volvé a abrir Visual Studio, VS Code y las consolas: los que estaban abiertos no ven la variable nueva.
-4. Comprobá, en una consola nueva: `$env:Rag__CarpetaDocumentos` muestra la carpeta.
+Los PDF no van en ninguna carpeta especial: se arrastran a la página "Documentos" y quedan guardados en la base. Tienen que tener texto seleccionable: los escaneados no se pueden leer, y quedan como `sin texto`.
 
 ## 8. Qdrant
 
@@ -168,13 +142,12 @@ SSMS es opcional: sirve para mirar la base y correr `sql\consultas-utiles.sql`. 
    Expand-Archive -Path "$env:USERPROFILE\Downloads\qdrant-x86_64-pc-windows-msvc.zip" -DestinationPath ..\RAG-BASICO-datos\qdrant
    ```
 
-3. Arrancalo en una consola aparte, parado en la carpeta del repo (el script usa git para encontrar la carpeta de Qdrant):
+3. No hace falta arrancarlo a mano: lo arranca `iniciar.cmd` (punto 9), en otra ventana, minimizada. La primera vez crea las carpetas `storage` y `snapshots` al lado de `qdrant.exe`: ahí quedan los datos. Para arrancarlo solo, y ver sus mensajes, parado en la carpeta del repo:
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\iniciar-qdrant.ps1
    ```
 
-   Queda corriendo en esa consola hasta Ctrl+C. La primera vez crea las carpetas `storage` y `snapshots` al lado de `qdrant.exe`: ahí quedan los datos.
 4. Comprobá: `http://127.0.0.1:6333` en el navegador muestra `"version":"1.20.2"`.
 
 No hace falta instalarlo ni ser administrador, y no pide abrir el firewall: el script lo hace escuchar solo en `127.0.0.1`. El zip para Windows no trae la página de administración de Qdrant (`/dashboard` da 404): no se usa.
@@ -185,13 +158,12 @@ No hace falta instalarlo ni ser administrador, y no pide abrir el firewall: el s
 
 1. **SQL Server:** si su servicio está en inicio manual, arrancalo como administrador: `Start-Service 'MSSQL$SQLEXPRESS'`.
 2. **Ollama:** tiene que estar su ícono en la bandeja. Si no, abrilo desde el menú Inicio.
-3. **Qdrant**, desde la fase 7: en una consola aparte, parado en la carpeta del repo, `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\iniciar-qdrant.ps1`.
-4. **La API:** `dotnet run` en la carpeta `RagBasico.Api`, o F5 en Visual Studio.
-5. **Desde la fase 7, `GET /salud`** dice si anda todo: `http://127.0.0.1:5087/salud` en el navegador, con el puerto de la fase. Con la fase preparada, los cinco chequeos dan `ok`.
+3. **Doble clic en `iniciar.cmd`**, en la carpeta del repo. Arranca Qdrant si no está andando, arranca la API y abre el navegador en `http://127.0.0.1:5089/`.
+4. **Mirá la franja de arriba de la página:** un punto por pieza. Con todo en verde, anda todo. Un punto amarillo o rojo trae debajo qué pasa y qué hacer.
 
-La primera vez en cada fase, desde la 2, hay que prepararla; las fases 0 y 1 no usan base. Antes de arrancar la API, su base: parado en la carpeta de esa fase, `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1` (en las fases 2 a 6, con `-Servidor 'lpc:localhost\SQLEXPRESS'`, como dice el punto 6). Desde la fase 8, sin la base la API no arranca. Después, con la API andando, los pedidos de la primera vez: están, en orden, en [worktrees.md](worktrees.md#la-primera-vez-en-cada-carpeta).
+La primera vez, antes del paso 3, hay que crear la base (punto 7). Después, en la página "Documentos", se arrastran los PDF.
 
-Al terminar: Ctrl+C en la consola de la API y en la de Qdrant. SQL Server y Ollama pueden quedar andando.
+Al terminar: Ctrl+C en la ventana de `iniciar.cmd`, y cerrar la ventana de Qdrant. SQL Server y Ollama pueden quedar andando. Si quedaban documentos pendientes, la próxima vez siguen solos.
 
 ## 10. Si algo no anda
 
@@ -200,22 +172,26 @@ Al terminar: Ctrl+C en la consola de la API y en la de Qdrant. SQL Server y Olla
 | `git`, `dotnet`, `sqlcmd` u `ollama` no se reconoce como comando | Abrí una consola nueva: la que estaba abierta no ve lo que se instaló después. En la terminal de Visual Studio o de VS Code no alcanza con abrir otra: cerrá el programa y volvé a abrirlo |
 | `winget` no se reconoce como comando | En una PC recién instalada puede tardar unos minutos en aparecer. Mientras tanto, usá el instalador de la página que dice cada punto |
 | PowerShell dice que el script no se puede cargar porque la ejecución de scripts está deshabilitada en este sistema (`running scripts is disabled on this system`) | Windows no deja correr un `.ps1` suelto: correlo con `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\<script>.ps1`, con los parámetros al final |
-| Un script dice `ERROR: esta carpeta no está adentro de un repo de git`, o `powershell` dice `The argument 'scripts\...' to the -File parameter does not exist` | La consola no está parada en la carpeta del repo: `cd F:\RAG-BASICO`, o la carpeta donde lo bajaste, y correlo de nuevo. Si bajaste el repo como ZIP, le falta la carpeta `.git`: bajalo con `git clone` (punto 1) |
+| Un script dice `ERROR: esta carpeta no está adentro de un repo de git`, o `powershell` dice `The argument 'scripts\...' to the -File parameter does not exist` | La consola no está parada en la carpeta del repo: `cd F:\RAG-BASICO`, o la carpeta donde lo bajaste, y correlo de nuevo. Si bajaste el repo como ZIP, le falta la carpeta `.git`: bajalo con `git clone` (punto 1). `iniciar.cmd` se puede abrir con doble clic desde cualquier lado |
 | `dotnet` dice `A compatible .NET SDK was not found` | Falta el SDK de la banda 10.0.4xx (punto 2) |
 | `Start-Service` dice `Cannot open MSSQL$SQLEXPRESS service` | La consola no está abierta como administrador: abrila como dice el principio de esta guía |
 | `scripts\crear-base.ps1` dice `ERROR: falta sqlcmd` | Instalá sqlcmd (punto 6) y abrí una consola nueva |
 | `scripts\crear-base.ps1` dice `The system cannot find the file specified` | El servicio de SQL Server está detenido. Como administrador: `Start-Service 'MSSQL$SQLEXPRESS'` |
-| En las fases 2 a 6, `scripts\crear-base.ps1` tarda unos 45 segundos y dice `Timed out waiting for pipe` | Pasale el servidor con `lpc:`: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1 -Servidor 'lpc:localhost\SQLEXPRESS'` (punto 6). Si sigue fallando, el servicio de SQL Server está detenido |
-| `scripts\crear-base.ps1` falla en `01_base.sql` con el error 7609, "Full-Text Search is not installed" | SQL Server se instaló sin Full-Text: agregalo (punto 5) |
+| `scripts\crear-base.ps1` falla en `base.sql` con el error 7609, "Full-Text Search is not installed" | SQL Server se instaló sin Full-Text: agregalo (punto 5) |
 | El instalador de SQL Server termina con un error en "Database Engine Services": `Wait on the Database Engine recovery handle failed` | Puede ser el disco: con algunos NVMe, Windows 11 informa sectores de más de 4 KB, y ninguna versión de SQL Server arranca así. Para verlo, en una consola como administrador: `fsutil fsinfo sectorinfo C:`. Si `PhysicalBytesPerSectorForAtomicity` o `PhysicalBytesPerSectorForPerformance` dan más de 4096, seguí el arreglo de Microsoft, una clave del registro y reiniciar: https://learn.microsoft.com/troubleshoot/sql/database-engine/database-file-operations/troubleshoot-os-4kb-disk-sector-size. Después, desinstalá lo que quedó de SQL Server y volvé a instalarlo (punto 5) |
-| `GET /salud` da `error` en SQL Server: `No se pudo leer la base` | Si dice `error: 26`, el servicio de SQL Server está detenido, aunque el mensaje hable del nombre de la instancia y de las conexiones remotas: arrancalo (punto 9). Si dice `Cannot open database` o `Invalid object name`, falta la base de la fase o sus tablas: creala con `scripts\crear-base.ps1` (punto 9) |
-| La API avisa al arrancar `No existe la carpeta de PDF`, o `POST /indexar` dice `ERROR: no existe la carpeta de PDF` | El mensaje muestra entre comillas la carpeta que buscó. Si está vacía (`''`), la API no ve la variable `Rag__CarpetaDocumentos`: creala (punto 7). Si es otra carpeta o una que no existe, volvé a crear la variable con la ruta completa de tu carpeta (punto 7). En los dos casos, después cerrá y volvé a abrir Visual Studio, VS Code y las consolas |
-| `GET /salud` dice que falta un modelo | Corré el `ollama pull` que muestra |
-| `GET /salud` dice `Ollama no responde` | Abrí Ollama desde el menú Inicio |
+| La franja muestra SQL Server en rojo | El texto de abajo dice qué pasa. `No se pudo conectar`: el servicio de SQL Server está detenido, aunque el mensaje de SQL hable del nombre de la instancia y de las conexiones remotas (`error: 26`): arrancalo (punto 9). `No se pudo abrir la base` o `faltan las tablas`: creala con `scripts\crear-base.ps1` (punto 7) |
+| Un PDF queda en `error` | La lista de "Documentos" muestra el motivo debajo del nombre: no es un PDF, está roto o tiene clave. Arreglado el motivo, "Reintentar los que fallaron" lo vuelve a procesar |
+| Un PDF queda en `sin texto` | Es un escaneo: no tiene texto seleccionable. No se puede cargar |
+| Los documentos quedan en `pendiente` y no avanzan | La consola de la API dice `La carga de documentos está frenada` y el motivo: un servidor no responde. La franja muestra cuál. Cuando vuelve, sigue sola. Un PDF muy grande también tarda: se procesa a unos 6 a 13 fragmentos por segundo |
+| "Importar de la base de origen" está apagado | Falta `Conexiones:SqlOrigen`. Para probar: `scripts\crear-origen-de-prueba.ps1` arma una base de prueba y dice qué poner en `RagBasico.Api\conexiones.json`. Después hay que volver a arrancar la API |
+| La franja muestra "SQL de origen" en amarillo | No se pudo leer la base de origen: el texto trae el mensaje de SQL Server. Revisá `Conexiones:SqlOrigen` y que `Conexiones:ConsultaLista` tenga bien los nombres de la tabla y de las columnas |
+| La franja dice que los puntos de Qdrant y los fragmentos de la base no coinciden | Se recreó la base, o se borró la colección. En "Documentos", "Reprocesar todo" |
+| La página dice que la subida es demasiado grande | Pasa de `Rag:MegasPorSubida` (200 MB): subí menos archivos por vez |
+| La franja dice que falta un modelo | Corré el `ollama pull` que muestra |
+| La franja dice `Ollama no responde` | Abrí Ollama desde el menú Inicio |
 | `scripts\iniciar-qdrant.ps1` dice `ERROR: no está ...\qdrant.exe` | `qdrant.exe` quedó en una subcarpeta o en otra carpeta: movelo a `RAG-BASICO-datos\qdrant\` (punto 8) |
 | `qdrant.exe` no arranca porque falta `VCRUNTIME140.dll` | Instalá el Visual C++ Redistributable (punto 8) |
-| Windows avisa que el Control inteligente de aplicaciones (Smart App Control) bloqueó un programa, o `dotnet run`, F5 o `scripts\iniciar-qdrant.ps1` fallan con `An Application Control policy has blocked this file` | Ese control bloquea los programas sin firma que Microsoft no conoce, y no admite excepciones para uno solo: `qdrant.exe` viene sin firma, y la API, que se compila en tu PC, también. Para usar el proyecto hay que apagarlo: Seguridad de Windows, "Control de aplicaciones y navegador" ("App & browser control"), "Configuración de Control Inteligente de Aplicaciones" ("Smart App Control settings"), "Desactivado" ("Off"). Ojo: en algunas PC, por ejemplo sin las últimas actualizaciones de Windows, una vez apagado no se puede volver a prender sin restablecer o reinstalar Windows |
-| La híbrida avisa que usó los vectores de SQL, o `GET /salud` da `aviso` en Qdrant | Leé el aviso: dice qué pasó. Si Qdrant no respondió (`Qdrant no respondió`, o `No responde` en `GET /salud`), arrancalo con `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\iniciar-qdrant.ps1`. Si respondió, hacé lo que dice el detalle de `GET /salud`: `POST /qdrant/reconstruir` si no existe la colección de la fase, o `POST /vectores` si está vacía |
-| La API no arranca: `address already in use` | Ya hay una API de esta misma fase escuchando en su puerto (cada fase tiene el suyo, `508N`): en otra consola, en Visual Studio o en la otra carpeta de la fase (la principal y la de `RAG-BASICO-fases`). Frenala con Ctrl+C, o Shift+F5 en Visual Studio |
-| Desde la fase 8, la API no arranca y el log dice `La API no arranca.` | Lo que sigue dice qué falta. `SQL Server` con `error: 26`: el servicio de SQL Server está detenido; arrancalo (punto 9). `SQL Server` con `Cannot open database`: falta la base de la fase; creala con `scripts\crear-base.ps1` (punto 9). `Modelos de Ollama`: abrí Ollama desde el menú Inicio, o corré el `ollama pull` que muestra. Para mirar la página sin todo andando, en esa consola: `$env:Rag__ChequearAlArrancar = 'false'` y otra vez `dotnet run` |
+| Windows avisa que el Control inteligente de aplicaciones (Smart App Control) bloqueó un programa, o `iniciar.cmd`, F5 o `scripts\iniciar-qdrant.ps1` fallan con `An Application Control policy has blocked this file` | Ese control bloquea los programas sin firma que Microsoft no conoce, y no admite excepciones para uno solo: `qdrant.exe` viene sin firma, y la API, que se compila en tu PC, también. Para usar el proyecto hay que apagarlo: Seguridad de Windows, "Control de aplicaciones y navegador" ("App & browser control"), "Configuración de Control Inteligente de Aplicaciones" ("Smart App Control settings"), "Desactivado" ("Off"). Ojo: en algunas PC, por ejemplo sin las últimas actualizaciones de Windows, una vez apagado no se puede volver a prender sin restablecer o reinstalar Windows |
+| La franja muestra Qdrant en rojo, o una pregunta da el error `Qdrant no responde` | Qdrant no está andando. Frená la API con Ctrl+C y volvé a abrir `iniciar.cmd`, que lo arranca. Si no arranca, corré `scripts\iniciar-qdrant.ps1` a mano para ver por qué (punto 8). Mientras tanto, la búsqueda "Solo palabras" sigue andando |
+| La API no arranca: `address already in use` | Ya hay una API escuchando en el puerto 5089: en otra ventana de `iniciar.cmd` o en Visual Studio. Frenala con Ctrl+C, o Shift+F5 en Visual Studio |
 | Las respuestas tardan mucho | Ollama está usando el procesador: mirá la columna `PROCESSOR` de `ollama ps` (punto 4) |

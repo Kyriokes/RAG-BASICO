@@ -1,0 +1,368 @@
+# Manual de lectura
+
+Para leer el proyecto entero y poder explicar cada archivo. Sigue dos recorridos de punta a punta, el de un PDF que se carga y el de una pregunta que se responde, y después lo que sostiene a los dos.
+
+Cómo usarlo: abrí cada archivo al lado de este documento y leelo en el orden que dice. Cada archivo tiene acá qué hace, por qué existe, en qué orden leer sus funciones, lo que es nuevo viniendo de VB.NET, y las preguntas que te pueden hacer, con su respuesta.
+
+El detalle de cada función está en [`responsabilidades.md`](responsabilidades.md); las tablas y la configuración, en [`arquitectura.md`](arquitectura.md).
+
+## 1. El proyecto en diez líneas
+
+1. Es un RAG: busca en documentos los párrafos que sirven para una pregunta, y un modelo de lenguaje redacta la respuesta **usando solo esos párrafos** y citando de cuál salió cada cosa.
+2. Tiene cuatro piezas: la API (este repo), SQL Server, Qdrant y Ollama.
+3. **SQL Server** guarda los PDF, los párrafos y el índice de palabras.
+4. **Qdrant** guarda los vectores: una lista de 1024 números por párrafo, que representa su significado.
+5. **Ollama** corre dos modelos: uno convierte texto en vectores, el otro redacta.
+6. **La API** es lo único que escribimos nosotros: recibe los PDF y las preguntas y coordina a los otros tres.
+7. Cada dato vive en un solo lugar, y cada lugar tiene una línea en el bloque `Conexiones` de `appsettings.json`.
+8. Un PDF entra por la página (o se importa de otra base), queda `pendiente`, y un trabajo en segundo plano lo procesa.
+9. Una pregunta se busca de dos maneras a la vez, por palabras y por significado, y se mezclan los resultados.
+10. Si algo no anda, la página dice qué pieza es y qué hacer.
+
+```text
+                 PDF                                    pregunta
+                  │                                         │
+          documentos.html                              index.html
+                  │                                         │
+                  ▼                                         ▼
+   ┌──────────────────────────────── Program.cs ────────────────────────────────┐
+   │  POST /documentos            GET /documentos           POST /preguntar      │
+   └──────┬──────────────────────────────────────────────────────┬──────────────┘
+          ▼                                                      ▼
+     Documentos  ◄── Procesador ──► Cargador                 Redactor
+     (anota)         (da vueltas)   (procesa uno)                │
+          │                            │                         ▼
+          │              Chunker ◄─────┤                     Buscador ──► Rrf
+          ▼                            ▼                      │      │
+      SQL Server ◄─────────────── Ollama, Qdrant ◄────────────┘      │
+          ▲                                                          │
+          └──────────────────────────────────────────────────────────┘
+```
+
+## 2. Antes de empezar: tres archivos que no son código
+
+### `RagBasico.Api\appsettings.json`
+
+**Qué es:** la configuración. Lo primero que hay que mirar es el bloque `Conexiones`, arriba de todo: ahí está todo lo que conecta. La cadena de SQL Server, la dirección de Qdrant con su colección y su clave, la dirección de Ollama con los nombres de los dos modelos, y la base de origen con sus dos consultas.
+
+**Por qué importa:** es la respuesta a "¿qué hay que tocar para instalarlo en otro lado?". Diez líneas, en un solo lugar.
+
+**Te pueden preguntar:**
+
+- *¿Las claves quedan en el repo?* No. Para otros servidores se crea `conexiones.json` al lado, que git ignora, con las líneas que cambian. `Program.cs` lo carga si existe.
+- *¿Por qué `127.0.0.1` y no `localhost`?* En casa Qdrant escucha solo en IPv4, y `localhost` a veces resuelve a IPv6.
+
+### `sql\base.sql`
+
+**Qué es:** toda la base, en un script que se puede correr de nuevo sin romper nada. Tres tablas en el esquema `rag`:
+
+- `rag.Documento`: un registro por PDF, con su `Estado` (`pendiente`, `listo`, `sin texto`, `error`). Si se arrastró, guarda los bytes en `Contenido`. Si se importó, guarda su número de la otra base en `OrigenId` y no guarda los bytes.
+- `rag.Fragmento`: los párrafos de cada PDF. `FragmentoId` es también el id del vector en Qdrant: ese número es lo que une las dos bases.
+- `rag.Consulta`: el registro de cada pregunta, con su respuesta y sus tiempos.
+
+Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que hace la búsqueda por palabras.
+
+**Te pueden preguntar:**
+
+- *¿Por qué no hay una columna con los vectores?* Porque están solo en Qdrant. Tenerlos en los dos lados obligaba a mantenerlos iguales, y a usar SQL Server 2025, que es el único que tiene el tipo `VECTOR`.
+- *¿Qué es `ON DELETE CASCADE`?* Si se borra un documento, SQL Server borra solo sus fragmentos.
+- *¿Qué son esos índices con `WHERE`?* Índices únicos con filtro: entre los arrastrados no puede haber dos con el mismo nombre; entre los importados, no puede haber dos con el mismo número de origen.
+- *¿Anda en un SQL Server viejo?* Sí: usa solo lo que entiende un SQL Server 2014 con Full-Text.
+
+### `RagBasico.Api\Program.cs`
+
+**Qué es:** el arranque. Se lee de arriba a abajo, en cuatro partes:
+
+1. **La configuración:** carga `conexiones.json` si existe.
+2. **Los servicios** (`builder.Services.Add...`): le dice a ASP.NET Core qué clases existen, para que las arme cuando alguien las pida. `Ollama` y `Qdrant` son clientes HTTP; `Documentos`, `Cargador`, `Buscador`, `Redactor` y `Salud` se crean nuevos en cada pedido; `Procesador` arranca con la API y queda corriendo.
+3. **El manejo de errores y los archivos de las páginas** (`app.Use...`).
+4. **Los pedidos** (`app.MapGet`, `app.MapPost`, `app.MapDelete`): cada uno es una dirección de la API y la función que la atiende. Casi todos tienen dos o tres líneas: controlan lo que llegó y llaman a una clase.
+
+**Nuevo viniendo de VB.NET:**
+
+| C# | VB.NET | Qué es |
+|---|---|---|
+| El archivo no tiene `Sub Main` | `Sub Main()` | Las instrucciones sueltas del archivo son el `Main` |
+| `builder.Services.AddScoped<Buscador>()` | no hay | Inyección de dependencias: anota que existe `Buscador`. Cuando un pedido lo necesita, ASP.NET Core lo crea y le pasa lo que pide su constructor |
+| `async (Buscador buscador, CancellationToken ct) => ...` | `Async Function(buscador, ct) ...` | Una función sin nombre (lambda). Los parámetros los completa ASP.NET Core |
+| `await` | `Await` | Espera el resultado sin trabar el hilo |
+| `string? modo` | `modo As String` (puede ser `Nothing`) | El `?` avisa que puede venir `null` |
+
+**Te pueden preguntar:**
+
+- *¿Dónde está la lógica?* No acá. `Program.cs` solo conecta: cada pedido llama a una clase.
+- *¿Qué es `CancellationToken`?* Un aviso de "el que pidió ya se fue". Si se cierra el navegador a mitad de una pregunta, la API corta en vez de seguir trabajando para nadie.
+- *¿Por qué `HttpRequest` en `POST /documentos`?* Para poder mirar el tamaño antes de leer los archivos, y contestar "la subida pasa de 200 MB" con un 413.
+
+## 3. El camino de un PDF
+
+### `RagBasico.Api\wwwroot\documentos.html`
+
+**Qué hace:** la página de carga. HTML, CSS y JavaScript a mano, sin librerías. Tiene la zona para soltar archivos, el botón de importar, los cinco números del avance y la lista.
+
+**Orden de lectura del JavaScript:** `pedir` (habla con la API y muestra el error si lo hay), `subir` (arma un formulario con los archivos y lo manda a `POST /documentos`), `actualizar` (pide `GET /documentos` cada 5 segundos si hay pendientes, cada 30 si no) y `dibujar`.
+
+**Te pueden preguntar:**
+
+- *¿Por qué `textContent` y no `innerHTML`?* Porque el nombre de un archivo lo elige quien lo sube. Con `innerHTML`, un nombre con etiquetas se ejecutaría como parte de la página.
+- *¿La página procesa algo?* No. Solo manda los archivos y mira el estado. Se puede cerrar y la carga sigue.
+
+### `RagBasico.Api\Documentos.cs`
+
+**Qué hace:** es el registro de los documentos. Anota los que llegan, dice cuál sigue, guarda el estado de cada uno, los lista y los borra. **No procesa nada.**
+
+**Por qué existe:** para que haya un solo lugar que escriba en `rag.Documento`. El `Cargador` procesa; `Documentos` lleva la cuenta.
+
+**Orden de lectura:**
+
+1. `EsPdf`, `CalcularHuella`, `ParametrosDeCorte`, `EstimarFalta`: cuatro funciones sueltas (`static`), sin base de datos. Son las más fáciles.
+2. `AnotarSubidosAsync`: lo que pasa cuando se sueltan archivos en la página. Por cada uno: ¿es un PDF? ¿ya estaba? ¿cambió?
+3. `AnotarOrigenAsync`: lo mismo para la base de origen. Corre la consulta de la lista y anota los que faltan, de a 1.000.
+4. `SiguientePendienteAsync` y `LeerContenidoAsync`: lo que le pide el `Cargador`.
+5. `MarcarAsync`, `ResumirAsync`, `BorrarAsync`, `ReintentarAsync`, `ReprocesarTodoAsync`.
+
+**Nuevo viniendo de VB.NET:**
+
+| C# | VB.NET | Qué es |
+|---|---|---|
+| `using (SqlConnection conexion = new SqlConnection(_conexion)) { ... }` | `Using conexion As New SqlConnection(_conexion) ... End Using` | Cierra la conexión al salir del bloque, pase lo que pase |
+| `conexion.QueryAsync<DocumentoFila>(sql, new { estado })` | no hay | Dapper: corre el SQL y arma un objeto por fila, emparejando columnas con propiedades por el nombre |
+| `new { archivo = nombre, huella }` | `New With { .archivo = nombre, .huella = huella }` | Un objeto sin clase, para pasar los parámetros del SQL |
+| `public sealed record Pendiente(int DocumentoId, ...)` | una `Class` con propiedades de solo lectura y constructor | Un tipo de datos en una línea |
+| `SemaphoreSlim Turno` | `SyncLock`, pero que se puede esperar con `Await` | Un candado: lo toma uno por vez |
+
+**Te pueden preguntar:**
+
+- *¿Qué es la huella?* El sha256 de los bytes del PDF más los parámetros de corte. Si se sube de nuevo el mismo archivo, la huella es igual y no se hace nada. Si cambia el PDF, o cambia la forma de cortarlo, la huella cambia y se reprocesa.
+- *¿Hay riesgo de inyección de SQL?* No en los datos: van siempre como parámetros (`@archivo`), nunca pegados al texto del SQL. Las dos consultas de la base de origen sí son texto, pero las escribe quien administra, en la configuración; no vienen de la página.
+- *¿Por qué los importados no guardan el PDF?* Ya está guardado en la otra base. Con decenas de miles, copiarlos puede pasar el tope de SQL Server Express.
+- *¿Y si en la otra base hay dos PDF con el mismo nombre?* No se pisan: un importado se reconoce por su número, no por su nombre.
+- *¿Para qué es `Turno`?* Para que "borrar" y "reprocesar todo" no le saquen los fragmentos a un documento que el `Cargador` está procesando en ese momento.
+- *¿Cómo sabe cuánto falta?* Cuenta cuántos documentos se terminaron en los últimos 10 minutos (`FechaProceso`) y divide los pendientes por esa velocidad. No guarda nada en memoria: todo sale de la tabla.
+
+### `RagBasico.Api\Procesador.cs`
+
+**Qué hace:** el trabajo en segundo plano. Arranca con la API y da vueltas: ¿hay un documento pendiente? Lo procesa y sigue. ¿No hay? Espera 5 segundos. ¿Un servidor no responde? Lo anota en el log una vez y espera 30.
+
+**Por qué existe:** una carga grande tarda horas. No puede depender de que una página quede abierta ni de un pedido HTTP que no se corte.
+
+**Nuevo viniendo de VB.NET:**
+
+| C# | VB.NET | Qué es |
+|---|---|---|
+| `class Procesador : BackgroundService` | `Inherits BackgroundService` | Una clase que ASP.NET Core arranca con la API y frena cuando se apaga. Es lo más parecido a un servicio de Windows adentro de la API |
+| `protected override async Task ExecuteAsync(...)` | `Protected Overrides Async Function ExecuteAsync(...)` | El método que corre de fondo |
+| `_alcances.CreateScope()` | no hay | Pide un `Cargador` nuevo para cada vuelta, igual que cada pedido HTTP recibe los suyos |
+
+**Te pueden preguntar:**
+
+- *¿Qué pasa si se apaga la API a mitad de un documento?* Ese documento sigue `pendiente`. Al volver a arrancar se procesa de nuevo, desde cero.
+- *¿Por qué de a uno y no varios a la vez?* La velocidad la pone el modelo de embeddings, que atiende de a un pedido. Varios a la vez no irían más rápido, y de a uno nunca hay dos documentos pisándose.
+- *¿Y si un PDF está roto? ¿Frena todo?* No. Ese queda en `error` con el motivo y se sigue con el próximo. Lo que frena es un servidor que no responde, y ahí conviene frenar: si no, quedarían todos en error.
+
+### `RagBasico.Api\Cargador.cs`
+
+**Qué hace:** procesa **un** documento, de punta a punta. Es el archivo más importante del camino de un PDF.
+
+**Orden de lectura:**
+
+1. `ProcesarSiguienteAsync`: pide el próximo pendiente, toma el turno y llama a `ProcesarAsync`.
+2. `ProcesarAsync`: los seis pasos, numerados en los comentarios.
+   1. Borra lo que hubiera quedado de un intento anterior.
+   2. Consigue los bytes del PDF.
+   3. Saca el texto (`SacarTexto`) y se fija si es un escaneo (`EsEscaneado`).
+   4. Lo corta (`Chunker.Partir`) y guarda los fragmentos en SQL.
+   5. De a 16 fragmentos, pide los vectores a Ollama y los sube a Qdrant.
+   6. Lo marca `listo`.
+3. El `catch` del final: decide si el problema fue del documento o de un servidor (`EsDeUnServidor`).
+4. `SacarTexto`, `EsEscaneado`, `RevisarTexto`: las tres funciones sueltas.
+
+**Te pueden preguntar:**
+
+- *¿Por qué empieza borrando?* Para que procesar dos veces el mismo documento dé siempre lo mismo. Si un intento quedó a medias, no quedan fragmentos ni vectores duplicados.
+- *¿Cómo sabe que un PDF es un escaneo?* Cuenta las palabras: menos de 40 por página en promedio. Un escaneo es una foto, no tiene texto.
+- *¿Por qué recién al final lo marca `listo`?* Porque la búsqueda solo mira los documentos `listo`. Uno a medio procesar no aparece.
+- *¿Qué pasa si Qdrant se cae en el paso 5?* El error es "de un servidor": se borran los fragmentos que se habían guardado, el documento sigue `pendiente` y el `Procesador` espera y reintenta.
+- *¿Por qué cada fragmento empieza con `Documento: <nombre>`?* Para que la búsqueda también lo encuentre por el nombre del documento.
+- *¿Con qué se lee el PDF?* Con PdfPig, una librería de código abierto. Es el único paquete, junto con Dapper y el cliente de SQL Server.
+
+### `RagBasico.Api\Chunker.cs`
+
+**Qué hace:** corta un texto largo en fragmentos de hasta 300 palabras, respetando los párrafos.
+
+**Por qué existe:** al modelo no se le puede pasar un PDF entero, y un vector de un texto muy largo no representa nada en particular. Los fragmentos son la unidad de búsqueda.
+
+**Orden de lectura:** `Partir` y sus dos ayudantes, `SepararParrafos` y `Cerrar`.
+
+**Te pueden preguntar:**
+
+- *¿Por qué 300 palabras?* Es un punto medio: entra una idea completa y el modelo de embeddings lo procesa bien. Está en la configuración.
+- *¿Qué es el solapamiento?* Cada fragmento repite las últimas 50 palabras del anterior. Así una idea que quedó cortada entre dos fragmentos aparece entera en alguno.
+- *¿Por qué por párrafos y no cada 300 palabras justas?* Para no partir una oración por la mitad ni dejar un título solo al final de un fragmento.
+
+### `RagBasico.Api\Ollama.cs`
+
+**Qué hace:** habla con Ollama por HTTP. Manda el mismo JSON que se mandaría con Postman.
+
+**Orden de lectura:** `EmbeddingsAsync` (texto → vector, lo usa el `Cargador`), `EmbeddingPreguntaAsync` (lo mismo para la pregunta, con una instrucción adelante), `ChatAsync` (la respuesta), `ListarModelosAsync` y `CalentarAsync`.
+
+**Te pueden preguntar:**
+
+- *¿Los documentos salen de la red?* No. Ollama corre en un servidor propio; nada va a internet.
+- *¿Por qué la pregunta lleva una instrucción en inglés?* Así se entrenó ese modelo de embeddings: los documentos van sin nada, y las preguntas con la instrucción adelante. Mejora lo que encuentra.
+- *¿Qué es `Dimension = 1024`?* Cuántos números tiene cada vector. Tiene que coincidir con la colección de Qdrant. Si se cambia el modelo por uno de otra dimensión, `GET /salud` lo delata.
+
+### `RagBasico.Api\Qdrant.cs`
+
+**Qué hace:** habla con Qdrant por HTTP: crea la colección, sube puntos, borra los de un documento y busca los más cercanos a un vector.
+
+**Orden de lectura:** `Configurar`, `AsegurarColeccionAsync`, `SubirAsync`, `BorrarDeDocumentoAsync`, `BuscarAsync`.
+
+**Te pueden preguntar:**
+
+- *¿Qué es un punto?* Un vector con un id y un dato extra. El id es el `FragmentoId` de SQL y el dato extra es el `DocumentoId`.
+- *¿Cómo se borran los vectores de un documento?* Con un filtro: "borrá los puntos cuyo `documentoId` es este".
+- *¿Qué es HNSW?* El índice de Qdrant. En vez de comparar la pregunta contra todos los vectores, salta entre vecinos hasta llegar a los más cercanos. Por eso responde en milisegundos con un millón de vectores.
+- *¿Por qué no se usa el paquete oficial de Qdrant?* Son seis pedidos HTTP. Escritos a mano se ve exactamente qué se manda, y es una dependencia menos.
+
+## 4. El camino de una pregunta
+
+### `RagBasico.Api\wwwroot\index.html`
+
+**Qué hace:** manda la pregunta y el modo a `POST /preguntar` y muestra la respuesta, las fuentes y los tiempos. Las fuentes que el modelo citó con `[n]` salen en texto normal; las que se le pasaron pero no citó, atenuadas.
+
+### `RagBasico.Api\Validador.cs`
+
+**Qué hace:** una sola función, `RevisarPregunta`. Devuelve el motivo del rechazo, o vacío si la pregunta sirve: vacía, demasiado larga, con caracteres de control, o sin letras ni números.
+
+**Te pueden preguntar:**
+
+- *¿Por qué devuelve un texto y no verdadero o falso?* Porque el motivo es lo que le llega a quien preguntó.
+
+### `RagBasico.Api\Redactor.cs`
+
+**Qué hace:** arma la respuesta. Le pide los fragmentos al `Buscador`, se los pasa al modelo con las reglas, y registra la consulta.
+
+**Orden de lectura:** la constante `Reglas` (el mensaje de sistema: es lo que hace que el modelo no invente), `ResponderAsync`, `ArmarMensaje`, `Neutralizar`, `EsSinRespuesta`, `RegistrarAsync`.
+
+**Te pueden preguntar:**
+
+- *¿Cómo se evita que el modelo invente?* Tres cosas. Las reglas le dicen que use solo los fragmentos y que cite cada oración. Si no alcanza, tiene que responder una frase fija, "No encontré esa información en los documentos". Y la página muestra las fuentes, así cualquiera puede comprobar.
+- *¿Y si un PDF trae un texto que dice "ignorá las instrucciones"?* La regla 5 le dice al modelo que lo que está entre `<fragmentos>` son datos, no órdenes. Y `Neutralizar` cambia los `<` y `>` del texto, para que un PDF no pueda cerrar ese bloque por su cuenta.
+- *¿Queda registro de lo que se preguntó?* Sí, en `rag.Consulta`: la pregunta, los fragmentos que se usaron, la respuesta y los tiempos.
+
+### `RagBasico.Api\Buscador.cs`
+
+**Qué hace:** encuentra los fragmentos que mejor responden una pregunta. Tres modos.
+
+**Orden de lectura:** `ElegirModo`, `BuscarAsync`, `PorPalabrasAsync`, `PorVectoresAsync`, `HibridaAsync`, `LeerFragmentosAsync`.
+
+- **Por palabras:** `FREETEXTTABLE`, del Full-Text de SQL Server. Busca las palabras de la pregunta, con sus plurales y conjugaciones.
+- **Por significado:** Ollama convierte la pregunta en un vector, Qdrant devuelve los números de los fragmentos más cercanos y SQL Server trae sus textos.
+- **Híbrida**, la que se usa por defecto: las dos a la vez, mezcladas.
+
+**Te pueden preguntar:**
+
+- *¿Por qué dos búsquedas?* Se equivocan en cosas distintas. La de palabras encuentra un número de expediente o una sigla exacta, pero no entiende sinónimos. La de significado entiende "que me devuelvan la plata" como "reintegro", pero puede pasar por alto un código exacto. Juntas cubren los dos casos.
+- *¿Qué es `Task.WhenAll`?* Arranca las dos búsquedas y espera a las dos. Se tarda lo que la más lenta, no la suma.
+- *¿Qué pasa si Qdrant no responde?* La búsqueda por palabras sigue andando. La de significado y la híbrida dan un error que dice "Qdrant no responde en tal dirección". No se sigue a medias sin avisar.
+
+### `RagBasico.Api\Rrf.cs`
+
+**Qué hace:** mezcla dos listas de resultados en una. Cada fragmento suma 1 / (60 + su puesto) por cada lista en la que aparece; quedan los de mayor puntaje.
+
+**Te pueden preguntar:**
+
+- *¿Por qué por puesto y no por puntaje?* Porque el puntaje del Full-Text y la distancia entre vectores miden cosas distintas, en escalas distintas. No se pueden sumar. El puesto sí: "segundo en una lista, cuarto en la otra".
+- *¿De dónde sale el 60?* Es el valor del trabajo que propuso el método (Reciprocal Rank Fusion). Hace que estar en las dos listas pese más que estar primero en una sola.
+
+## 5. Lo que sostiene todo
+
+### `RagBasico.Api\Salud.cs`
+
+**Qué hace:** revisa cada pieza y dice cómo está. Es lo que se ve en la franja de arriba de las páginas.
+
+**Orden de lectura:** `RevisarAsync` y después un método por chequeo. Todos tienen la misma forma: un `try` que prueba la pieza y devuelve `ok` o `aviso`, y un `catch` que devuelve `error` con la dirección que probó y qué hacer.
+
+**Te pueden preguntar:**
+
+- *¿Qué pasa si falta un servidor?* La API arranca igual y la franja lo muestra en rojo, con el nombre del servidor, la dirección y qué hacer.
+- *¿Cómo se sabe si Qdrant quedó desparejo con SQL?* Compara la cantidad de puntos con la cantidad de fragmentos de los documentos listos. Si no coinciden, avisa y dice "Reprocesar todo".
+- *¿Muestra la clave de SQL en el mensaje?* No. `Describir` saca de la cadena solo el servidor y la base.
+
+### Los cuatro archivos de errores
+
+Son cortos y se leen juntos, en este orden:
+
+1. `ErrorDeServicio.cs`: un tipo de error propio, que lleva el nombre del servicio y el código HTTP.
+2. `DetectorDeCaidas.cs`: va delante de los clientes de Ollama y de Qdrant. Si no se puede conectar, cambia el error genérico por un `ErrorDeServicio` que dice "Qdrant no responde en http://...".
+3. `Errores.cs`: `EsCaida` dice si un error es un servidor que no responde, o uno que sí respondió con un error.
+4. `ManejadorDeErrores.cs`: atiende cualquier error que nadie atrapó y lo convierte en una respuesta con título, detalle y código: 503 si un servidor no responde, 502 si respondió con un error, 504 si tardó demasiado, 400 si el pedido está mal, 413 si la subida es muy grande.
+
+**Te pueden preguntar:**
+
+- *¿Qué ve el usuario si algo falla?* Nunca un "error 500" pelado. Ve qué falló y qué hacer.
+- *¿Qué es ProblemDetails?* El formato estándar para devolver errores en una API: un JSON con `title`, `detail` y `status`.
+
+### `RagBasico.Api\Modelos.cs`
+
+Los tipos de datos que van y vienen: lo que se manda a `/preguntar`, lo que devuelve, un fragmento, un documento de la lista. Cada uno es un `record` de una línea. No tiene lógica.
+
+### `RagBasico.Api\wwwroot\estado.js` y `estilos.css`
+
+`estado.js` es una función, `mostrarEstado`: pide `GET /salud` cada 15 segundos y dibuja un punto por chequeo. `estilos.css` tiene los colores y las formas que comparten las dos páginas, en claro y en oscuro.
+
+### Los scripts
+
+| Archivo | Qué hace |
+|---|---|
+| `iniciar.cmd` | El doble clic. Una línea: corre `scripts\iniciar.ps1` |
+| `scripts\iniciar.ps1` | Lee la dirección de Qdrant. Si es de esta PC y no responde, lo arranca. Después corre la API |
+| `scripts\iniciar-qdrant.ps1` | Arranca Qdrant escuchando solo en esta PC, con su carpeta de datos fija y sin telemetría |
+| `scripts\crear-base.ps1` | Corre `sql\base.sql` en la base de `Conexiones:SqlTextos` |
+| `scripts\crear-origen-de-prueba.ps1` | Arma una base como la de origen, con los PDF de una carpeta, para probar la importación |
+| `scripts\controlar-docs.ps1` | Controla que la documentación coincida con el código |
+
+**Te pueden preguntar:**
+
+- *¿Por qué el arranque está en un script y no en el programa?* Para que el programa sea el mismo en una PC y en varios servidores. Lo que cambia entre un lugar y otro queda afuera del código.
+
+## 6. Las decisiones y sus porqués
+
+| Decisión | En una frase |
+|---|---|
+| Cada dato en un solo lugar | No hay nada que mantener igual en dos lados, y mover una pieza es cambiar una línea |
+| Los vectores, solo en Qdrant | Es para lo que está hecho; SQL Server queda con lo que hace bien: guardar y buscar por palabras |
+| El PDF queda en SQL | Qdrant se puede rehacer entero, y la API no depende de una carpeta |
+| Los importados no se copian | Ya están guardados en la otra base |
+| El segundo plano | Una carga grande tarda horas y no puede depender de una página abierta |
+| El estado en la tabla | Se puede apagar en cualquier momento y sigue después. No hay nada en memoria que se pierda |
+| La API arranca siempre | Es más útil que diga qué falta a que no arranque |
+| Sin Qdrant no hay híbrida | Mejor un error claro que una respuesta peor sin aviso |
+| Sin librerías en las páginas | Son tres archivos que se leen enteros; no hay nada que instalar ni actualizar |
+| Tres paquetes y nada más | Dapper (SQL), el cliente de SQL Server y PdfPig (leer PDF). Ollama y Qdrant se hablan por HTTP a mano |
+| Sin interfaces para cambiar de motor | Cambiar de servidor es cambiar una línea. Cambiar de motor es otro proyecto, y prepararlo ahora serían archivos que no se usan |
+
+## 7. Lo que no hace
+
+Conviene decirlo antes de que lo pregunten:
+
+- **No lee PDF escaneados.** Quedan como `sin texto`. Leerlos pide OCR, que es otro paso.
+- **No tiene usuarios ni permisos.** La API escucha solo en la PC donde corre. Para abrirla a una red hay que agregar eso primero.
+- **Procesa un documento por vez.** La velocidad la pone el modelo de embeddings: entre 6 y 13 fragmentos por segundo en la PC de prueba.
+- **No se probó con decenas de miles de documentos.** Se probó con 13 PDF. El diseño lo contempla (lee la lista de a una fila, anota de a 1.000, tiene índices por estado), pero la primera carga grande es la prueba real.
+- **No mide la calidad de las respuestas con números.** Hasta la fase 8 había un examen automático; se sacó porque no hay preguntas escritas para los documentos reales. Sigue en la branch `fase-8-validaciones`.
+- **No responde lo que no está en los documentos.** Eso es a propósito.
+
+## 8. Cómo comprobar que entendiste
+
+Con el proyecto andando, probá predecir qué va a pasar antes de hacerlo:
+
+1. Soltá un PDF y mirá `rag.Documento` en SSMS: ¿en qué estado está? ¿Cuándo cambia?
+2. Soltá el mismo PDF de nuevo: ¿qué dice la página? ¿Por qué?
+3. Cerrá la ventana de Qdrant y preguntá en cada modo: ¿cuál responde y cuál no?
+4. Con documentos pendientes, frená la API con Ctrl+C y volvé a arrancarla: ¿qué pasa con el que estaba a medias?
+5. Cambiá `Conexiones:ColeccionQdrant` por otro nombre en `conexiones.json` y arrancá: ¿qué muestra la franja? ¿Cómo se arregla?
+6. Buscá en `rag.Consulta` tu última pregunta: ¿qué fragmentos se le pasaron al modelo?
+
+Si podés explicar los seis, podés explicar el proyecto.
