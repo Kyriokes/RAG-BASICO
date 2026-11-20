@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http.Features;
 using RagBasico.Api;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -29,6 +30,11 @@ builder.Services.AddExceptionHandler<ManejadorDeErrores>();
 // Un pedido que no se puede leer, como un JSON roto, lanza un error que atiende el ManejadorDeErrores con el motivo.
 // ASP.NET Core lo hace solo en Development; así es igual en cualquier entorno.
 builder.Services.Configure<RouteHandlerOptions>(opciones => opciones.ThrowOnBadRequest = true);
+// El tope de una subida de PDF, en megas. Va en los dos lugares donde ASP.NET Core corta por tamaño:
+// el servidor (Kestrel) y la lectura del formulario.
+long topeDeSubida = builder.Configuration.GetValue("Rag:MegasPorSubida", 200) * 1024L * 1024L;
+builder.WebHost.ConfigureKestrel(opciones => opciones.Limits.MaxRequestBodySize = topeDeSubida);
+builder.Services.Configure<FormOptions>(opciones => opciones.MultipartBodyLengthLimit = topeDeSubida);
 
 var app = builder.Build();
 
@@ -68,8 +74,77 @@ app.MapGet("/info", () => new
 {
     proyecto = app.Configuration["Rag:Proyecto"],
     fase = app.Configuration["Rag:Fase"],
-    dotnet = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription
+    dotnet = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
+    // La página de documentos prende el botón de importar solo si hay una base de origen configurada.
+    origenConfigurado = (app.Configuration["Conexiones:SqlOrigen"] ?? "") != ""
 });
+
+// Cargar PDF arrastrados a la página. Solo los anota como pendientes: los procesa el trabajo en segundo plano.
+app.MapPost("/documentos", async (HttpRequest pedido, Documentos documentos, CancellationToken ct) =>
+{
+    int megas = app.Configuration.GetValue("Rag:MegasPorSubida", 200);
+    if (pedido.ContentLength > topeDeSubida)
+    {
+        return Results.Problem(title: "La subida es demasiado grande", detail: "La subida pasa de " + megas + " MB. Subí menos archivos por vez.", statusCode: 413);
+    }
+    if (!pedido.HasFormContentType)
+    {
+        return Results.Problem(title: "El pedido no es válido", detail: "Los PDF se mandan como un formulario (multipart/form-data), en el campo archivos.", statusCode: 400);
+    }
+    IFormCollection formulario = await pedido.ReadFormAsync(ct);
+    List<ArchivoSubido> archivos = new List<ArchivoSubido>();
+    foreach (IFormFile archivo in formulario.Files)
+    {
+        using (MemoryStream memoria = new MemoryStream())
+        {
+            await archivo.CopyToAsync(memoria, ct);
+            archivos.Add(new ArchivoSubido(archivo.FileName, memoria.ToArray()));
+        }
+    }
+    if (archivos.Count == 0)
+    {
+        return Results.Problem(title: "El pedido no es válido", detail: "No llegó ningún archivo.", statusCode: 400);
+    }
+    return Results.Ok(await documentos.AnotarSubidosAsync(archivos, ct));
+});
+
+// Importar de la base de origen: anota como pendientes los documentos que todavía no están. No trae los PDF.
+app.MapPost("/documentos/importar", async (Documentos documentos, CancellationToken ct) =>
+{
+    if ((app.Configuration["Conexiones:SqlOrigen"] ?? "") == "")
+    {
+        return Results.Problem(title: "No hay base de origen configurada", detail: "Completá Conexiones:SqlOrigen, Conexiones:ConsultaLista y Conexiones:ConsultaContenido, y volvé a arrancar la API.", statusCode: 400);
+    }
+    return Results.Ok(await documentos.AnotarOrigenAsync(ct));
+});
+
+// El avance de la carga y una página de la lista de documentos, de todos o de un solo estado.
+app.MapGet("/documentos", async (string? estado, int? pagina, Documentos documentos, CancellationToken ct) =>
+{
+    string? filtro = string.IsNullOrWhiteSpace(estado) ? null : estado.Trim().ToLowerInvariant();
+    if (filtro != null && !Documentos.Estados.Contains(filtro))
+    {
+        return Results.Problem(title: "Estado desconocido", detail: "No existe el estado '" + estado + "'. Los estados son: " + string.Join(", ", Documentos.Estados) + ".", statusCode: 400);
+    }
+    return Results.Ok(await documentos.ResumirAsync(filtro, pagina ?? 1, ct));
+});
+
+app.MapDelete("/documentos/{id:int}", async (int id, Documentos documentos, CancellationToken ct) =>
+{
+    if (!await documentos.BorrarAsync(id, ct))
+    {
+        return Results.Problem(title: "No existe ese documento", detail: "No hay un documento con el número " + id + ".", statusCode: 404);
+    }
+    return Results.NoContent();
+});
+
+// Vuelve a intentar los documentos que quedaron con error.
+app.MapPost("/documentos/reintentar", async (Documentos documentos, CancellationToken ct) =>
+    new { cuantos = await documentos.ReintentarAsync(ct) });
+
+// Rehace todo desde los PDF: borra la colección de Qdrant y los fragmentos, y deja todos los documentos pendientes.
+app.MapPost("/documentos/reprocesar", async (Documentos documentos, CancellationToken ct) =>
+    new { cuantos = await documentos.ReprocesarTodoAsync(ct) });
 
 // Una pregunta que no sirve o un modo mal escrito dan un error 400 que dice el motivo,
 // en lugar de buscar con algo que no sirve o con otro modo sin avisar.

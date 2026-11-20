@@ -48,6 +48,10 @@ public sealed class ManejadorDeErrores : IExceptionHandler
         BadHttpRequestException? malArmado = error as BadHttpRequestException;
         if (malArmado != null)
         {
+            if (malArmado.StatusCode == 413)
+            {
+                return Problema(413, "La subida es demasiado grande", "La subida pasa del tope (Rag:MegasPorSubida). Subí menos archivos por vez.");
+            }
             return Problema(malArmado.StatusCode, "El pedido no es válido", error.Message);
         }
         // Un ArgumentException no es culpa de quien pregunta: lo que manda el cliente ya lo controlan el Validador y
