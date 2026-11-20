@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RAG básico: documentos</title>
+<link rel="stylesheet" href="estilos.css">
+<style>
+  #zona {
+    border: 2px dashed var(--borde);
+    border-radius: 10px;
+    padding: 28px 16px;
+    text-align: center;
+    color: var(--suave);
+    cursor: pointer;
+  }
+  #zona.encima { border-color: var(--acento); color: var(--texto); }
+  #zona strong { color: var(--texto); }
+  #informe { margin: 12px 0 0; font-size: 0.875rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .acciones { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; align-items: center; }
+  #numeros { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; margin: 0; }
+  #numeros div { border: 1px solid var(--borde); border-radius: 8px; padding: 10px 12px; }
+  #numeros dt { color: var(--suave); font-size: 0.8rem; }
+  #numeros dd { margin: 0; font-size: 1.4rem; font-weight: 600; }
+  .tabla { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--borde); vertical-align: top; }
+  th { color: var(--suave); font-weight: 600; white-space: nowrap; }
+  td.archivo { overflow-wrap: anywhere; min-width: 160px; }
+  td .detalle { display: block; color: var(--suave); }
+  .estado { font-weight: 600; white-space: nowrap; }
+  .estado.listo { color: var(--ok); }
+  .estado.pendiente { color: var(--suave); }
+  .estado.error { color: var(--error); }
+  .estado.sin-texto { color: var(--aviso); }
+  .paginas { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  .paginas select { width: auto; }
+</style>
+</head>
+<body>
+<main>
+  <nav>
+    <a href="index.html">Preguntar</a>
+    <a href="documentos.html" class="actual">Documentos</a>
+  </nav>
+
+  <section id="estado" class="tarjeta" aria-live="polite"></section>
+
+  <h1>Documentos</h1>
+  <p class="bajada">Los PDF se cargan acá. Quedan pendientes y se procesan solos, de a uno, aunque cierres esta página.</p>
+
+  <p id="error" class="error" hidden role="alert"></p>
+
+  <section class="tarjeta">
+    <div id="zona" role="button" tabindex="0">
+      <strong>Soltá los PDF acá</strong>, o hacé clic para elegirlos.
+    </div>
+    <input type="file" id="elegir" accept="application/pdf,.pdf" multiple hidden>
+    <p id="informe" hidden></p>
+    <div class="acciones">
+      <button type="button" id="importar" class="secundario" disabled>Importar de la base de origen</button>
+      <span id="notaImportar" class="nota"></span>
+    </div>
+  </section>
+
+  <section class="tarjeta" aria-live="polite">
+    <dl id="numeros">
+      <div><dt>Listos</dt><dd id="nListos">-</dd></div>
+      <div><dt>Pendientes</dt><dd id="nPendientes">-</dd></div>
+      <div><dt>Sin texto</dt><dd id="nSinTexto">-</dd></div>
+      <div><dt>Con error</dt><dd id="nError">-</dd></div>
+      <div><dt>Fragmentos</dt><dd id="nFragmentos">-</dd></div>
+    </dl>
+    <p id="avance" class="nota"></p>
+    <div class="acciones">
+      <button type="button" id="reintentar" class="secundario">Reintentar los que fallaron</button>
+      <button type="button" id="reprocesar" class="secundario">Reprocesar todo</button>
+    </div>
+  </section>
+
+  <section class="tarjeta">
+    <div class="paginas">
+      <label for="filtro" style="margin: 0">Mostrar</label>
+      <select id="filtro">
+        <option value="">Todos</option>
+        <option value="listo">Listos</option>
+        <option value="pendiente">Pendientes</option>
+        <option value="sin texto">Sin texto</option>
+        <option value="error">Con error</option>
+      </select>
+    </div>
+    <div class="tabla">
+      <table>
+        <thead>
+          <tr><th>Archivo</th><th>Estado</th><th>Fragmentos</th><th></th></tr>
+        </thead>
+        <tbody id="filas"></tbody>
+      </table>
+    </div>
+    <p id="vacio" class="nota" hidden>No hay documentos para mostrar.</p>
+    <div class="paginas">
+      <button type="button" id="anterior" class="secundario chico">Anterior</button>
+      <span id="pagina" class="nota" style="margin: 0"></span>
+      <button type="button" id="siguiente" class="secundario chico">Siguiente</button>
+    </div>
+  </section>
+</main>
+
+<script src="estado.js"></script>
+<script>
+  const zona = document.getElementById('zona');
+  const elegir = document.getElementById('elegir');
+  const informe = document.getElementById('informe');
+  const importar = document.getElementById('importar');
+  const notaImportar = document.getElementById('notaImportar');
+  const error = document.getElementById('error');
+  const filtro = document.getElementById('filtro');
+  const filas = document.getElementById('filas');
+  const vacio = document.getElementById('vacio');
+  const avance = document.getElementById('avance');
+  const textoPagina = document.getElementById('pagina');
+  const anterior = document.getElementById('anterior');
+  const siguiente = document.getElementById('siguiente');
+
+  // Cuántos documentos trae cada página de la lista: el mismo número que usa la API.
+  const POR_PAGINA = 50;
+  let pagina = 1;
+  let reloj = null;
+
+  mostrarEstado(document.getElementById('estado'));
+  prepararImportar();
+  actualizar();
+
+  // --- Pedirle algo a la API. Devuelve los datos, o muestra el error y devuelve null.
+  async function pedir(ruta, opciones) {
+    error.hidden = true;
+    try {
+      const pedido = await fetch(ruta, opciones);
+      const cuerpo = await pedido.text();
+      let datos = null;
+      try { datos = JSON.parse(cuerpo); } catch (e) { datos = null; }
+      if (!pedido.ok) {
+        // Los errores vienen como ProblemDetails: el título dice qué pasó y el detalle, qué hacer.
+        const motivo = datos && [datos.title, datos.detail].filter(Boolean).join(': ');
+        mostrarError(motivo || ('La API respondió ' + pedido.status + '.'));
+        return null;
+      }
+      return datos || {};
+    } catch (e) {
+      mostrarError('No se pudo conectar con la API: ' + e.message);
+      return null;
+    }
+  }
+
+  function mostrarError(texto) {
+    error.textContent = texto;
+    error.hidden = false;
+  }
+
+  // --- Subir: soltar archivos en la zona, o elegirlos con un clic.
+  zona.addEventListener('click', function () { elegir.click(); });
+  zona.addEventListener('keydown', function (evento) {
+    if (evento.key === 'Enter' || evento.key === ' ') { evento.preventDefault(); elegir.click(); }
+  });
+  elegir.addEventListener('change', function () { subir(elegir.files); elegir.value = ''; });
+  zona.addEventListener('dragover', function (evento) { evento.preventDefault(); zona.classList.add('encima'); });
+  zona.addEventListener('dragleave', function () { zona.classList.remove('encima'); });
+  zona.addEventListener('drop', function (evento) {
+    evento.preventDefault();
+    zona.classList.remove('encima');
+    subir(evento.dataTransfer.files);
+  });
+
+  async function subir(archivos) {
+    if (!archivos || archivos.length === 0) { return; }
+    const formulario = new FormData();
+    for (const archivo of archivos) {
+      formulario.append('archivos', archivo, archivo.name);
+    }
+    informe.textContent = 'Subiendo ' + archivos.length + ' archivos...';
+    informe.hidden = false;
+    const datos = await pedir('/documentos', { method: 'POST', body: formulario });
+    if (datos === null) { informe.hidden = true; return; }
+    mostrarInforme(datos);
+    actualizar();
+  }
+
+  function mostrarInforme(datos) {
+    const partes = [];
+    if (datos.nuevos) { partes.push(datos.nuevos + ' nuevos'); }
+    if (datos.reemplazados) { partes.push(datos.reemplazados + ' reemplazados'); }
+    if (datos.sinCambios) { partes.push(datos.sinCambios + ' ya estaban'); }
+    if (datos.rechazados) { partes.push(datos.rechazados + ' rechazados'); }
+    let texto = partes.length ? partes.join(', ') + '.' : 'No se cargó nada.';
+    if (datos.detalle && datos.detalle.length) {
+      texto += '\n' + datos.detalle.join('\n');
+    }
+    informe.textContent = texto;
+    informe.hidden = false;
+  }
+
+  // --- Importar: solo si la API tiene una base de origen configurada.
+  async function prepararImportar() {
+    const info = await pedir('/info');
+    if (info && info.origenConfigurado) {
+      importar.disabled = false;
+      notaImportar.textContent = 'Anota como pendientes los documentos de la base de origen que todavía no están.';
+    } else {
+      notaImportar.textContent = 'No hay base de origen configurada (Conexiones:SqlOrigen).';
+    }
+  }
+
+  importar.addEventListener('click', async function () {
+    importar.disabled = true;
+    informe.textContent = 'Leyendo la lista de la base de origen...';
+    informe.hidden = false;
+    const datos = await pedir('/documentos/importar', { method: 'POST' });
+    importar.disabled = false;
+    if (datos === null) { informe.hidden = true; return; }
+    mostrarInforme(datos);
+    actualizar();
+  });
+
+  // --- El avance y la lista. Se actualiza solo: cada 5 segundos si hay pendientes, cada 30 si no.
+  async function actualizar() {
+    clearTimeout(reloj);
+    let ruta = '/documentos?pagina=' + pagina;
+    if (filtro.value) { ruta += '&estado=' + encodeURIComponent(filtro.value); }
+    const datos = await pedir(ruta);
+    let espera = 30000;
+    if (datos !== null) {
+      dibujar(datos);
+      if (datos.pendientes > 0) { espera = 5000; }
+    }
+    reloj = setTimeout(actualizar, espera);
+  }
+
+  function dibujar(datos) {
+    document.getElementById('nListos').textContent = datos.listos;
+    document.getElementById('nPendientes').textContent = datos.pendientes;
+    document.getElementById('nSinTexto').textContent = datos.sinTexto;
+    document.getElementById('nError').textContent = datos.conError;
+    document.getElementById('nFragmentos').textContent = datos.fragmentos;
+
+    if (datos.pendientes > 0) {
+      const velocidad = datos.documentosPorMinuto.toLocaleString('es-AR', { maximumFractionDigits: 1 });
+      avance.textContent = 'Procesando: ' + velocidad + ' documentos por minuto en los últimos 10 minutos. Falta: ' + datos.tiempoQueFalta + '.';
+    } else {
+      avance.textContent = 'No hay documentos pendientes.';
+    }
+
+    filas.replaceChildren();
+    for (const documento of datos.pagina) {
+      filas.appendChild(armarFila(documento));
+    }
+    vacio.hidden = datos.pagina.length > 0;
+    textoPagina.textContent = 'Página ' + pagina;
+    anterior.disabled = pagina <= 1;
+    siguiente.disabled = datos.pagina.length < POR_PAGINA;
+  }
+
+  function armarFila(documento) {
+    const fila = document.createElement('tr');
+
+    const archivo = document.createElement('td');
+    archivo.className = 'archivo';
+    // textContent y no innerHTML: el nombre de un archivo nunca se interpreta como HTML.
+    archivo.textContent = documento.archivo;
+    if (documento.origenId) {
+      const origen = document.createElement('span');
+      origen.className = 'detalle';
+      origen.textContent = 'Importado, número ' + documento.origenId;
+      archivo.appendChild(origen);
+    }
+    if (documento.detalle) {
+      const detalle = document.createElement('span');
+      detalle.className = 'detalle';
+      detalle.textContent = documento.detalle;
+      archivo.appendChild(detalle);
+    }
+    fila.appendChild(archivo);
+
+    const estado = document.createElement('td');
+    estado.className = 'estado ' + documento.estado.replace(' ', '-');
+    estado.textContent = documento.estado;
+    fila.appendChild(estado);
+
+    const fragmentos = document.createElement('td');
+    fragmentos.textContent = documento.fragmentos;
+    fila.appendChild(fragmentos);
+
+    const acciones = document.createElement('td');
+    const borrar = document.createElement('button');
+    borrar.type = 'button';
+    borrar.className = 'secundario chico';
+    borrar.textContent = 'Borrar';
+    borrar.addEventListener('click', async function () {
+      if (!confirm('¿Borrar ' + documento.archivo + '? Se borran sus fragmentos y sus vectores.')) { return; }
+      borrar.disabled = true;
+      await pedir('/documentos/' + documento.documentoId, { method: 'DELETE' });
+      actualizar();
+    });
+    acciones.appendChild(borrar);
+    fila.appendChild(acciones);
+
+    return fila;
+  }
+
+  filtro.addEventListener('change', function () { pagina = 1; actualizar(); });
+  anterior.addEventListener('click', function () { if (pagina > 1) { pagina--; actualizar(); } });
+  siguiente.addEventListener('click', function () { pagina++; actualizar(); });
+
+  document.getElementById('reintentar').addEventListener('click', async function () {
+    const datos = await pedir('/documentos/reintentar', { method: 'POST' });
+    if (datos !== null) {
+      informe.textContent = datos.cuantos + ' documentos vuelven a pendientes.';
+      informe.hidden = false;
+      actualizar();
+    }
+  });
+
+  document.getElementById('reprocesar').addEventListener('click', async function () {
+    if (!confirm('Reprocesar todo borra los fragmentos y los vectores, y vuelve a procesar todos los documentos desde los PDF. Con muchos documentos tarda horas. ¿Seguir?')) { return; }
+    const datos = await pedir('/documentos/reprocesar', { method: 'POST' });
+    if (datos !== null) {
+      informe.textContent = datos.cuantos + ' documentos quedaron pendientes para procesar de nuevo.';
+      informe.hidden = false;
+      actualizar();
+    }
+  });
+</script>
+</body>
+</html>
