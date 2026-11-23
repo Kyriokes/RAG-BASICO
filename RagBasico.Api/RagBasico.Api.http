@@ -38,6 +38,9 @@ POST {{host}}/documentos/reintentar
 ### Rehacer todo desde los PDF: borra la colección de Qdrant y los fragmentos, y deja todo pendiente
 POST {{host}}/documentos/reprocesar
 
+### Abrir el PDF de un documento por su número: lo lee de SQL y lo devuelve para el visor del navegador. Si no existe, 404
+GET {{host}}/documentos/1/pdf
+
 ### Borrar un documento por su número, con sus fragmentos y sus vectores. Si no existe, 404
 DELETE {{host}}/documentos/1
 

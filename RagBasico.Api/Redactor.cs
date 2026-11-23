@@ -63,7 +63,8 @@ public sealed class Redactor
                 texto = respuesta.Texto;
                 for (int i = 0; i < fragmentos.Count; i++)
                 {
-                    fuentes.Add(new Fuente(i + 1, fragmentos[i].Archivo, fragmentos[i].FragmentoId));
+                    Fragmento fragmento = fragmentos[i];
+                    fuentes.Add(new Fuente(i + 1, fragmento.DocumentoId, fragmento.Archivo, fragmento.Pagina, fragmento.PaginaFin, fragmento.FragmentoId));
                 }
             }
             resultado = new RespuestaRag(texto, fuentes, msBusqueda, msModelo, respuesta.MsCarga, respuesta.MsLectura, respuesta.MsEscritura);

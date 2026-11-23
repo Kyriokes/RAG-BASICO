@@ -270,7 +270,7 @@ public sealed class Documentos
         }
         if (_conexionOrigen == "")
         {
-            throw new ErrorDeServicio("SQL de origen", 503, "Hay documentos importados pendientes, pero Conexiones:SqlOrigen está vacía: no se pueden leer.", null);
+            throw new ErrorDeServicio("SQL de origen", 503, "Hay documentos importados, pero Conexiones:SqlOrigen está vacía: sus PDF no se pueden leer.", null);
         }
         try
         {
@@ -283,8 +283,32 @@ public sealed class Documentos
         }
         catch (SqlException ex)
         {
+            // Si el que pidió se fue, como quien cierra la pestaña mientras se abre un PDF, no es un error de la base de origen.
+            if (ct.IsCancellationRequested)
+            {
+                throw;
+            }
             throw ErrorDeOrigen(ex);
         }
+    }
+
+    /// <summary>Trae el PDF de un documento para abrirlo, esté en el estado que esté: de la base del RAG si se arrastró, de la base de origen si se importó. Devuelve null si el documento no existe; si existe pero no hay PDF, lo devuelve con el contenido en null.</summary>
+    public async Task<PdfGuardado?> LeerPdfAsync(int documentoId, CancellationToken ct)
+    {
+        Pendiente? documento;
+        using (SqlConnection conexion = new SqlConnection(_conexion))
+        {
+            documento = await conexion.QuerySingleOrDefaultAsync<Pendiente>(new CommandDefinition(
+                "SELECT DocumentoId, Archivo, OrigenId, Huella, Intentos FROM rag.Documento WHERE DocumentoId = @id;",
+                new { id = documentoId }, cancellationToken: ct));
+        }
+        if (documento == null)
+        {
+            return null;
+        }
+        // Los bytes se leen igual que cuando se procesa el documento, del mismo lugar.
+        byte[]? contenido = await LeerContenidoAsync(documento, ct);
+        return new PdfGuardado(documento.Archivo, contenido);
     }
 
     /// <summary>Anota que se empieza a procesar un documento: le suma un intento. Si el proceso se cae a mitad, el intento queda contado.</summary>
@@ -400,7 +424,7 @@ public sealed class Documentos
         }
     }
 
-    /// <summary>Rehace todo desde los PDF: deja todos los documentos pendientes, borra todos los fragmentos y borra la colección de Qdrant. Devuelve cuántos documentos quedaron pendientes.</summary>
+    /// <summary>Rehace todo desde los PDF: deja todos los documentos pendientes, borra todos los fragmentos y borra la colección de Qdrant. Devuelve cuántos documentos quedaron pendientes. Si a la base le faltan las columnas de la página, no borra nada y lanza un error que dice cómo actualizarla.</summary>
     public async Task<int> ReprocesarTodoAsync(CancellationToken ct)
     {
         await Turno.WaitAsync(ct);
@@ -409,6 +433,15 @@ public sealed class Documentos
             int cuantos;
             using (SqlConnection conexion = new SqlConnection(_conexion))
             {
+                // Antes de borrar nada: si la base se creó antes de que se guardara la página y todavía no se actualizó,
+                // el Cargador no podría guardar ningún fragmento y la base quedaría vacía. Se avisa y no se toca nada.
+                int tienePagina = await conexion.ExecuteScalarAsync<int>(new CommandDefinition(
+                    "SELECT CASE WHEN COL_LENGTH(N'rag.Fragmento', N'Pagina') IS NULL OR COL_LENGTH(N'rag.Fragmento', N'PaginaFin') IS NULL THEN 0 ELSE 1 END;",
+                    cancellationToken: ct));
+                if (tienePagina == 0)
+                {
+                    throw new ErrorDeServicio("SQL Server", 502, "A la tabla rag.Fragmento le faltan las columnas de la página, así que no se reprocesó ni se borró nada. Frená la API, corré sql\\base.sql en ese servidor (en casa, scripts\\crear-base.ps1) y probá de nuevo.", null);
+                }
                 // Primero todos a pendiente: desde acá ninguno aparece en las búsquedas, y si esto se corta, lo que sigue lo rehace el Cargador.
                 cuantos = await conexion.ExecuteAsync(new CommandDefinition(
                     "UPDATE rag.Documento SET Estado = 'pendiente', Detalle = NULL, FechaProceso = NULL, Intentos = 0;",

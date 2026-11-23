@@ -12,6 +12,10 @@ public sealed class Buscador
     /// <summary>El modo que se usa cuando el pedido no dice cuál.</summary>
     public const string ModoPorDefecto = "hibrida";
 
+    // Las columnas que traen las dos consultas, en el mismo orden y con los mismos nombres que el record Fragmento:
+    // Dapper arma el record con su constructor, y si no coinciden falla al ejecutar.
+    private const string Columnas = "f.FragmentoId, d.DocumentoId, d.Archivo, f.Pagina, f.PaginaFin, f.Texto";
+
     private readonly Ollama _ollama;
     private readonly Qdrant _qdrant;
     private readonly string _conexion;
@@ -80,7 +84,7 @@ public sealed class Buscador
         // Solo cuentan los documentos listos: uno a medio procesar todavía no tiene sus vectores. Por eso se piden
         // 200 y no menos: si los primeros son de un documento a medio procesar, igual quedan para elegir.
         const string sql = @"
-SELECT TOP (@topK) f.FragmentoId, d.Archivo, f.Texto
+SELECT TOP (@topK) " + Columnas + @"
 FROM FREETEXTTABLE(rag.Fragmento, Texto, @pregunta, LANGUAGE 3082, 200) AS ft
 JOIN rag.Fragmento AS f ON f.FragmentoId = ft.[KEY]
 JOIN rag.Documento AS d ON d.DocumentoId = f.DocumentoId
@@ -122,7 +126,7 @@ ORDER BY ft.[RANK] DESC;";
         using (SqlConnection conexion = new SqlConnection(_conexion))
         {
             IEnumerable<Fragmento> filas = await conexion.QueryAsync<Fragmento>(new CommandDefinition(
-                "SELECT f.FragmentoId, d.Archivo, f.Texto FROM rag.Fragmento AS f " +
+                "SELECT " + Columnas + " FROM rag.Fragmento AS f " +
                 "JOIN rag.Documento AS d ON d.DocumentoId = f.DocumentoId " +
                 "WHERE f.FragmentoId IN @ids AND d.Estado = 'listo';",
                 new { ids }, cancellationToken: ct));

@@ -152,8 +152,8 @@ public sealed class Cargador
                 return;
             }
 
-            // 4. Los fragmentos, guardados en SQL. Su número es el id del vector en Qdrant.
-            List<string> partes = Chunker.Partir(string.Join("\n\n", paginas), _palabras, _solapamiento);
+            // 4. Los fragmentos, guardados en SQL con la página donde empiezan. Su número es el id del vector en Qdrant.
+            List<Parte> partes = Chunker.PartirPaginas(paginas, _palabras, _solapamiento);
             List<FragmentoNuevo> fragmentos = await GuardarFragmentosAsync(pendiente, partes, ct);
 
             // 5. Los vectores, de a lotes: se piden a Ollama y se suben a Qdrant.
@@ -208,8 +208,8 @@ public sealed class Cargador
         }
     }
 
-    /// <summary>Guarda los fragmentos de un documento en una sola transacción y devuelve cada uno con su número.</summary>
-    private async Task<List<FragmentoNuevo>> GuardarFragmentosAsync(Pendiente pendiente, List<string> partes, CancellationToken ct)
+    /// <summary>Guarda los fragmentos de un documento, con la página donde empieza cada uno y la página donde termina si cruza a otra, en una sola transacción. Devuelve cada uno con su número.</summary>
+    private async Task<List<FragmentoNuevo>> GuardarFragmentosAsync(Pendiente pendiente, List<Parte> partes, CancellationToken ct)
     {
         string titulo = Path.GetFileNameWithoutExtension(pendiente.Archivo);
         List<FragmentoNuevo> fragmentos = new List<FragmentoNuevo>();
@@ -221,10 +221,17 @@ public sealed class Cargador
                 for (int i = 0; i < partes.Count; i++)
                 {
                     // Cada fragmento empieza con el nombre del documento, así la búsqueda también lo encuentra por el nombre.
-                    string texto = "Documento: " + titulo + "\n" + partes[i];
+                    string texto = "Documento: " + titulo + "\n" + partes[i].Texto;
+                    // La página de fin se guarda solo si el fragmento cruza a otra página: si no, queda en NULL.
+                    int? paginaFin = null;
+                    if (partes[i].PaginaFin != partes[i].Pagina)
+                    {
+                        paginaFin = partes[i].PaginaFin;
+                    }
                     int fragmentoId = await conexion.ExecuteScalarAsync<int>(new CommandDefinition(
-                        "INSERT INTO rag.Fragmento (DocumentoId, Orden, Texto) OUTPUT INSERTED.FragmentoId VALUES (@documentoId, @orden, @texto);",
-                        new { documentoId = pendiente.DocumentoId, orden = i + 1, texto }, transaccion, cancellationToken: ct));
+                        "INSERT INTO rag.Fragmento (DocumentoId, Orden, Texto, Pagina, PaginaFin) OUTPUT INSERTED.FragmentoId " +
+                        "VALUES (@documentoId, @orden, @texto, @pagina, @paginaFin);",
+                        new { documentoId = pendiente.DocumentoId, orden = i + 1, texto, pagina = partes[i].Pagina, paginaFin }, transaccion, cancellationToken: ct));
                     fragmentos.Add(new FragmentoNuevo(fragmentoId, texto));
                 }
                 transaccion.Commit();
@@ -288,6 +295,7 @@ public sealed class Cargador
     /// <summary>Saca el texto de un PDF con PdfPig, una página por elemento de la lista, en el orden en que se lee. Si el PDF está roto o tiene clave, lanza el error de PdfPig.</summary>
     public static List<string> SacarTexto(byte[] contenido)
     {
+        // Una página sin texto también ocupa su lugar en la lista: el número de página de cada fragmento sale de la posición.
         List<string> paginas = new List<string>();
         using (PdfDocument pdf = PdfDocument.Open(contenido))
         {
