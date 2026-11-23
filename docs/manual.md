@@ -57,7 +57,7 @@ El detalle de cada función está en [`responsabilidades.md`](responsabilidades.
 **Qué es:** toda la base, en un script que se puede correr de nuevo sin romper nada. Tres tablas en el esquema `rag`:
 
 - `rag.Documento`: un registro por PDF, con su `Estado` (`pendiente`, `listo`, `sin texto`, `error`). Si se arrastró, guarda los bytes en `Contenido`. Si se importó, guarda su número de la otra base en `OrigenId` y no guarda los bytes.
-- `rag.Fragmento`: los párrafos de cada PDF. `FragmentoId` es también el id del vector en Qdrant: ese número es lo que une las dos bases.
+- `rag.Fragmento`: los párrafos de cada PDF. `FragmentoId` es también el id del vector en Qdrant: ese número es lo que une las dos bases. `Pagina` es la página del PDF donde empieza el fragmento, y `PaginaFin`, la página donde termina, solo si termina en otra.
 - `rag.Consulta`: el registro de cada pregunta, con su respuesta y sus tiempos.
 
 Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que hace la búsqueda por palabras.
@@ -68,6 +68,10 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 - *¿Qué es `ON DELETE CASCADE`?* Si se borra un documento, SQL Server borra solo sus fragmentos.
 - *¿Qué son esos índices con `WHERE`?* Índices únicos con filtro: entre los arrastrados no puede haber dos con el mismo nombre; entre los importados, no puede haber dos con el mismo número de origen.
 - *¿Anda en un SQL Server viejo?* Sí: usa solo lo que entiende un SQL Server 2014 con Full-Text.
+- *¿Por qué `Pagina` y `PaginaFin` aparecen dos veces, en el `CREATE TABLE` y en un `ALTER TABLE`?* El `CREATE TABLE` corre solo si la tabla no existe: sirve para una base nueva. Una base que ya tenía la tabla sin esas columnas necesita el `ALTER TABLE`, que corre solo si la columna falta (`COL_LENGTH` devuelve `NULL`). Así el mismo script sirve para crear y para actualizar, y correrlo dos veces no rompe nada.
+- *¿Por qué cada `ALTER TABLE` va en su lote, con su `GO`?* SQL Server revisa un lote entero antes de correrlo. Con cada columna en su lote, lo que viene después ya la ve creada.
+- *¿Por qué las dos columnas aceptan `NULL`?* Por dos motivos distintos. `Pagina` en `NULL` es un fragmento que se cargó antes de que existiera la columna: no se inventa una página. `PaginaFin` en `NULL` es un fragmento que empieza y termina en la misma página.
+- *¿Cómo se actualiza una base que ya tiene documentos?* Se frena la API y se corre `scripts\crear-base.ps1`: agrega las columnas y no toca lo cargado. Después, "Reprocesar todo" en la página "Documentos", para que los fragmentos se rehagan con su página. Mientras tanto, `GET /salud` avisa: si faltan las columnas, el chequeo de SQL Server da error y dice qué correr.
 
 ### `RagBasico.Api\Program.cs`
 
@@ -93,6 +97,11 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 - *¿Dónde está la lógica?* No acá. `Program.cs` solo conecta: cada pedido llama a una clase.
 - *¿Qué es `CancellationToken`?* Un aviso de "el que pidió ya se fue". Si se cierra el navegador a mitad de una pregunta, la API corta en vez de seguir trabajando para nadie.
 - *¿Por qué `HttpRequest` en `POST /documentos`?* Para poder mirar el tamaño antes de leer los archivos, y contestar "la subida pasa de 200 MB" con un 413.
+- *¿Qué hace `GET /documentos/{id:int}/pdf`?* Devuelve el PDF de un documento para que el navegador lo abra. Es adonde apuntan los enlaces de las fuentes. Es el único pedido que no devuelve JSON, y por eso es el más largo: arma tres encabezados a mano.
+- *¿Por qué `Content-Disposition: inline`?* Le dice al navegador "mostralo", no "descargalo". Con `attachment` lo bajaría a la carpeta de descargas y el `#page=N` del enlace no serviría para nada. El nombre del archivo lo escribe `SetHttpFileName`, que lo deja bien armado para un encabezado aunque tenga tildes, eñes o comillas.
+- *¿Por qué `nosniff`?* Sin eso, un navegador puede mirar el contenido y decidir por su cuenta que es otra cosa, por ejemplo una página con scripts. Con `nosniff` lo trata como PDF y como nada más. Además, antes de mandarlo se controla que empiece con `%PDF-`: en la base de origen, lo que hay guardado lo cargó otro sistema.
+- *¿Por qué `no-store`?* Un documento se puede reemplazar por otro con el mismo nombre y el mismo número. Si el navegador guardara una copia, mostraría el PDF viejo.
+- *¿Por qué `{id:int}`?* Si en la dirección no viene un número, ASP.NET Core contesta 404 sin llamar a la función. No hay que controlarlo a mano.
 
 ## 3. El camino de un PDF
 
@@ -120,7 +129,8 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 3. `AnotarOrigenAsync`: lo mismo para la base de origen. Corre la consulta de la lista y anota los que faltan, de a 1.000.
 4. `SumarIntentoAsync`, `DevolverIntentoAsync` y `MarcarListoAsync`: lo que usa el `Cargador` para llevar la cuenta de los intentos y cerrar un documento.
 5. `SiguientePendienteAsync` y `LeerContenidoAsync`: lo que le pide el `Cargador`.
-6. `MarcarAsync`, `ResumirAsync`, `BorrarAsync`, `ReintentarAsync`, `ReprocesarTodoAsync`.
+6. `LeerPdfAsync`: trae el PDF de un documento para abrirlo. Busca el documento y llama a `LeerContenidoAsync`, la misma función que usa el `Cargador`.
+7. `MarcarAsync`, `ResumirAsync`, `BorrarAsync`, `ReintentarAsync`, `ReprocesarTodoAsync`.
 
 **Nuevo viniendo de VB.NET:**
 
@@ -140,6 +150,9 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 - *¿Y si en la otra base hay dos PDF con el mismo nombre?* No se pisan: un importado se reconoce por su número, no por su nombre.
 - *¿Para qué es `Turno`?* Para que "borrar" y "reprocesar todo" no le saquen los fragmentos a un documento que el `Cargador` está procesando en ese momento.
 - *¿Cómo sabe cuánto falta?* Cuenta cuántos documentos se terminaron en los últimos 10 minutos (`FechaProceso`) y divide los pendientes por esa velocidad. No guarda nada en memoria: todo sale de la tabla.
+- *¿De dónde sale el PDF que se abre desde una fuente?* De SQL, no de una carpeta. Si se arrastró, de `rag.Documento.Contenido`. Si se importó, de la base de origen, con la misma consulta que usa la carga. No hay carpeta porque no hay ninguna: el PDF ya está en una base, y una carpeta sería una segunda copia para mantener igual, con sus permisos y su ruta para configurar.
+- *¿Por qué `LeerPdfAsync` devuelve `null` en un caso y un PDF sin contenido en otro?* Para poder decir cosas distintas. `null`: no existe ese documento. Con nombre y sin contenido: el documento existe pero su PDF no está, por ejemplo porque lo borraron de la base de origen. Los dos son un 404, con otro mensaje.
+- *¿Se puede abrir el PDF de un documento que quedó en `error`?* Sí, en cualquier estado. Sirve justamente para mirar qué tiene.
 - *¿Para qué es la columna `Intentos`?* Cuenta cuántas veces se empezó a procesar un documento sin terminar. Al tercero queda en `error`. Sin eso, un PDF que cuelga el lector frenaría la cola para siempre.
 
 ### `RagBasico.Api\Procesador.cs`
@@ -175,7 +188,7 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
    1. Borra lo que hubiera quedado de un intento anterior.
    2. Consigue los bytes del PDF.
    3. Saca el texto (`SacarTexto`) y se fija si es un escaneo (`EsEscaneado`).
-   4. Lo corta (`Chunker.Partir`) y guarda los fragmentos en SQL.
+   4. Lo corta (`Chunker.PartirPaginas`) y guarda los fragmentos en SQL (`GuardarFragmentosAsync`), cada uno con la página donde empieza y, si cruza a otra, la página donde termina.
    5. De a 16 fragmentos, pide los vectores a Ollama y los sube a Qdrant.
    6. Lo marca `listo`, si sigue siendo el mismo PDF.
 3. El `catch` del final: decide de quién fue la culpa. De un servidor (`EsDeUnServidor`): queda pendiente y se espera. No se sabe (`EsPasajero`): se reintenta hasta tres veces. Del documento: se borran los vectores que llegó a subir y queda en `error`.
@@ -190,21 +203,30 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 - *¿Y si alguien reemplaza el PDF justo mientras se procesa?* Al final se marca `listo` solo si la huella es la misma con que se empezó. Si cambió, se descarta lo armado y se procesa el nuevo.
 - *¿Y si un PDF deja al lector dando vueltas?* Se lo espera 5 minutos. Si no termina, queda en `error` y se sigue.
 - *¿Por qué cada fragmento empieza con `Documento: <nombre>`?* Para que la búsqueda también lo encuentre por el nombre del documento.
+- *¿Por qué al `Chunker` se le pasa una lista de páginas y no el texto entero?* Porque la página no está escrita en el texto: es la posición en la lista. `SacarTexto` devuelve un texto por página, en orden, y una página en blanco también ocupa su lugar. Si se uniera todo antes de cortar, ese dato se perdería.
+- *¿Por qué `PaginaFin` se guarda en `NULL` si el `Chunker` siempre la devuelve?* El `Chunker` devuelve las dos páginas, iguales si el fragmento no cruza. En la tabla se guarda la de fin solo cuando es otra. Así, en SSMS y en la página, "tiene página de fin" quiere decir "cruza de página".
 - *¿Con qué se lee el PDF?* Con PdfPig, una librería de código abierto. Es el único paquete, junto con Dapper y el cliente de SQL Server.
 
 ### `RagBasico.Api\Chunker.cs`
 
-**Qué hace:** corta un texto largo en fragmentos de hasta 300 palabras, respetando los párrafos.
+**Qué hace:** corta un texto largo en fragmentos de hasta 300 palabras, respetando los párrafos, y anota en qué página del PDF empieza y termina cada uno.
 
 **Por qué existe:** al modelo no se le puede pasar un PDF entero, y un vector de un texto muy largo no representa nada en particular. Los fragmentos son la unidad de búsqueda.
 
-**Orden de lectura:** `Partir` y sus dos ayudantes, `SepararParrafos` y `Cerrar`.
+**Orden de lectura:** `PartirPaginas`, que es la que hace el trabajo, y sus ayudantes: `SepararParrafos`, `Cerrar`, `ArmarParte` y `Unir`. Al final, `Partir`: es `PartirPaginas` con una sola página, para cortar un texto suelto. Hoy la usan solo las pruebas.
+
+Abajo de todo está `Palabra`, un `record` privado: una palabra con el número de su página. Lo que devuelve `PartirPaginas` es una lista de `Parte` (está en `Modelos.cs`): el texto, la página de inicio y la página de fin.
 
 **Te pueden preguntar:**
 
 - *¿Por qué 300 palabras?* Es un punto medio: entra una idea completa y el modelo de embeddings lo procesa bien. Está en la configuración.
 - *¿Qué es el solapamiento?* Cada fragmento repite las últimas 50 palabras del anterior. Así una idea que quedó cortada entre dos fragmentos aparece entera en alguno.
 - *¿Por qué por párrafos y no cada 300 palabras justas?* Para no partir una oración por la mitad ni dejar un título solo al final de un fragmento.
+- *¿Por qué la página se anota en cada palabra y no en cada párrafo o en cada fragmento?* Porque un fragmento no respeta las páginas: junta párrafos de dos páginas, corta un párrafo largo por la mitad y arranca con 50 palabras del anterior. La única unidad que nunca se parte es la palabra. Si cada palabra sabe su página, la página de un fragmento sale sola, se lo arme como se lo arme: es la de su primera palabra y la de su última. No hay ninguna cuenta aparte que pueda quedar desfasada.
+- *¿Qué es la página de inicio?* La página donde está la primera palabra del fragmento, contando las 50 repetidas del anterior. Es adonde abre el enlace de la fuente. Se cuenta desde 1, en el orden del PDF: es el número que usa el visor del navegador.
+- *¿Y la de fin?* La página donde está la última palabra. Si es la misma que la de inicio, el fragmento no cruza de página.
+- *¿Por qué el párrafo corto que queda pendiente sigue de una página a la otra?* Un párrafo de menos de 15 palabras, como un título, se pega al que le sigue. Un título al pie de una página es el título de lo que abre la página siguiente: si se cortara ahí, quedaría separado de su texto. Además, así el corte da lo mismo que si el PDF fuera un solo texto largo. El fragmento que arranca con ese título dice que empieza en la página del título, que es donde hay que abrir el PDF para leerlo entero.
+- *¿Cambió la forma de cortar? ¿Hay que recargar todo?* El corte no cambió: los fragmentos tienen el mismo texto que da unir las páginas con una línea en blanco y cortar. Por eso `Chunker.Version` sigue en `parrafos-1` y la huella de los documentos es la misma. Se probó con 3.000 documentos armados al azar, comparando contra una copia del corte sin páginas: dan igual. Lo que sí hace falta en una base que ya tenía documentos es "Reprocesar todo", pero por otro motivo: para que los fragmentos guardados tengan su página.
 
 ### `RagBasico.Api\Ollama.cs`
 
@@ -237,6 +259,17 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 
 **Qué hace:** manda la pregunta y el modo a `POST /preguntar` y muestra la respuesta, las fuentes y los tiempos. Las fuentes que el modelo citó con `[n]` salen en texto normal; las que se le pasaron pero no citó, atenuadas.
 
+Cada fuente es un enlace que abre el PDF en otra pestaña, con el visor del navegador, en la página donde empieza el fragmento. Dice "archivo, página 3 (fragmento 41)". Si el fragmento cruza de página, "archivo, páginas 3 a 4 (fragmento 41)". Si no tiene página guardada, "archivo (fragmento 41)", y el enlace abre el PDF desde el principio.
+
+**Orden de lectura del JavaScript:** la función del `submit` del formulario manda el pedido, `mostrarRespuesta` dibuja lo que vuelve y `mostrarError` muestra un error. Dentro de `mostrarRespuesta`, el bucle que recorre `datos.fuentes` arma los enlaces: la dirección es `/documentos/` + el número del documento + `/pdf`, y si hay página se le agrega `#page=` + la página.
+
+**Te pueden preguntar:**
+
+- *¿Qué es `#page=3`?* Una indicación para el visor de PDF del navegador: "andá a la página 3". Lo que va después del `#` no se manda al servidor. La API devuelve siempre el PDF entero y no se entera de la página.
+- *¿Por qué abre en otra pestaña?* Para no perder la respuesta que está en pantalla: se puede mirar el PDF y volver a la respuesta sin preguntar de nuevo. `rel="noopener"` hace que la pestaña nueva no pueda tocar a la que la abrió.
+- *¿Por qué el enlace se arma con `createElement` y `textContent`?* Por lo mismo que en la página de documentos: el nombre del archivo lo eligió quien lo subió, y así nunca se interpreta como HTML. La dirección se arma solo con números.
+- *¿Qué pasa con un documento cargado antes de que se guardara la página?* La fuente sale sin página y el enlace abre el PDF desde el principio. Se arregla con "Reprocesar todo".
+
 ### `RagBasico.Api\Validador.cs`
 
 **Qué hace:** una sola función, `RevisarPregunta`. Devuelve el motivo del rechazo, o vacío si la pregunta sirve: vacía, demasiado larga, con caracteres de control, o sin letras ni números.
@@ -256,6 +289,7 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 - *¿Cómo se evita que el modelo invente?* Tres cosas. Las reglas le dicen que use solo los fragmentos y que cite cada oración. Si no alcanza, tiene que responder una frase fija, "No encontré esa información en los documentos". Y la página muestra las fuentes, así cualquiera puede comprobar.
 - *¿Y si un PDF trae un texto que dice "ignorá las instrucciones"?* La regla 5 le dice al modelo que lo que está entre `<fragmentos>` son datos, no órdenes. Y `Neutralizar` cambia los `<` y `>` del texto, para que un PDF no pueda cerrar ese bloque por su cuenta.
 - *¿Queda registro de lo que se preguntó?* Sí, en `rag.Consulta`: la pregunta, los fragmentos que se usaron, la respuesta y los tiempos.
+- *¿El modelo sabe de qué página salió cada fragmento?* No. `ArmarMensaje` le pasa solo el número `[n]` y el texto. La página la pone la API en las fuentes, sacada de la tabla: el modelo no la puede inventar ni equivocar.
 
 ### `RagBasico.Api\Buscador.cs`
 
@@ -271,6 +305,7 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 
 - *¿Por qué dos búsquedas?* Se equivocan en cosas distintas. La de palabras encuentra un número de expediente o una sigla exacta, pero no entiende sinónimos. La de significado entiende "que me devuelvan la plata" como "reintegro", pero puede pasar por alto un código exacto. Juntas cubren los dos casos.
 - *¿Qué es `Task.WhenAll`?* Arranca las dos búsquedas y espera a las dos. Se tarda lo que la más lenta, no la suma.
+- *¿Para qué es la constante `Columnas`?* Las dos consultas, la de palabras y la que trae los textos por número, tienen que devolver las mismas columnas. Dapper arma el `record` `Fragmento` con su constructor: las columnas tienen que venir en el mismo orden y con los mismos nombres, y si no coinciden falla recién al ejecutar. Con la lista escrita una sola vez, no pueden quedar distintas.
 - *¿Qué pasa si Qdrant no responde?* La búsqueda por palabras sigue andando. La de significado y la híbrida dan un error que dice "Qdrant no responde en tal dirección". No se sigue a medias sin avisar.
 
 ### `RagBasico.Api\Rrf.cs`
@@ -294,6 +329,7 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 
 - *¿Qué pasa si falta un servidor?* La API arranca igual y la franja lo muestra en rojo, con el nombre del servidor, la dirección y qué hacer.
 - *¿Cómo se sabe si Qdrant quedó desparejo con SQL?* Compara la cantidad de puntos con la cantidad de fragmentos. Si Qdrant tiene más puntos que fragmentos hay en la base, trae puntos de otra carga. Y sin pendientes, las dos cantidades tienen que ser iguales. Si no, avisa y dice "Reprocesar todo".
+- *¿Qué pasa si la base quedó sin actualizar?* Si a `rag.Fragmento` le faltan las columnas de la página, el chequeo "SQL Server" da error y dice que se corra `sql\base.sql`. Se controla ahí porque sin esas columnas fallarían la carga y la búsqueda, con un error de SQL que no dice qué hacer.
 - *¿Muestra la clave de SQL en el mensaje?* No. `Describir` saca de la cadena solo el servidor y la base.
 
 ### Los cuatro archivos de errores
@@ -312,7 +348,7 @@ Son cortos y se leen juntos, en este orden:
 
 ### `RagBasico.Api\Modelos.cs`
 
-Los tipos de datos que van y vienen: lo que se manda a `/preguntar`, lo que devuelve, un fragmento, un documento de la lista. Cada uno es un `record` de una línea. No tiene lógica.
+Los tipos de datos que van y vienen: lo que se manda a `/preguntar`, lo que devuelve, un fragmento recién cortado (`Parte`), un fragmento encontrado (`Fragmento`), una fuente (`Fuente`), un PDF para abrir (`PdfGuardado`), un documento de la lista. Cada uno es un `record` de una línea. No tiene lógica.
 
 ### `RagBasico.Api\wwwroot\estado.js` y `estilos.css`
 
@@ -325,7 +361,7 @@ Los tipos de datos que van y vienen: lo que se manda a `/preguntar`, lo que devu
 | `iniciar.cmd` | El doble clic. Una línea: corre `scripts\iniciar.ps1` |
 | `scripts\iniciar.ps1` | Lee la dirección de Qdrant. Si es de esta PC y no responde, lo arranca. Después corre la API |
 | `scripts\iniciar-qdrant.ps1` | Arranca Qdrant escuchando solo en esta PC, con su carpeta de datos fija y sin telemetría |
-| `scripts\crear-base.ps1` | Corre `sql\base.sql` en la base de `Conexiones:SqlTextos` |
+| `scripts\crear-base.ps1` | Corre `sql\base.sql` en la base de `Conexiones:SqlTextos`, la de `appsettings.json`. Sirve para crearla y para actualizar una ya creada. `iniciar.cmd` no lo corre |
 | `scripts\crear-origen-de-prueba.ps1` | Arma una base como la de origen, con los PDF de una carpeta, para probar la importación |
 | `scripts\controlar-docs.ps1` | Controla que la documentación coincida con el código |
 
@@ -339,7 +375,9 @@ Los tipos de datos que van y vienen: lo que se manda a `/preguntar`, lo que devu
 |---|---|
 | Cada dato en un solo lugar | No hay nada que mantener igual en dos lados, y mover una pieza es cambiar una línea |
 | Los vectores, solo en Qdrant | Es para lo que está hecho; SQL Server queda con lo que hace bien: guardar y buscar por palabras |
-| El PDF queda en SQL | Qdrant se puede rehacer entero, y la API no depende de una carpeta |
+| El PDF queda en SQL | Qdrant se puede rehacer entero, y la API no depende de una carpeta. De ahí mismo se lee para abrirlo desde una fuente |
+| La página se anota al cortar, palabra por palabra | Es el único momento en que se sabe, y la palabra es lo único que nunca se parte |
+| La página la pone la API, no el modelo | Sale de la tabla: no se puede inventar |
 | Los importados no se copian | Ya están guardados en la otra base |
 | El segundo plano | Una carga grande tarda horas y no puede depender de una página abierta |
 | El estado en la tabla | Se puede apagar en cualquier momento y sigue después. No hay nada en memoria que se pierda |
@@ -360,6 +398,18 @@ Conviene decirlo antes de que lo pregunten:
 - **No mide la calidad de las respuestas con números.** Hasta la fase 8 había un examen automático; se sacó porque no hay preguntas escritas para los documentos reales. Sigue en la branch `fase-8-validaciones`.
 - **No responde lo que no está en los documentos.** Eso es a propósito.
 
+Y los límites de las fuentes con página:
+
+- **La página es la física, no la impresa.** Es la que muestra el visor, contando desde la primera hoja del PDF. Si el documento tiene carátula o índice, no coincide con el número impreso en la hoja.
+- **La mayoría de las fuentes dice "páginas N a M".** Un fragmento tiene 300 palabras, y eso casi siempre cruza de una página a la otra.
+- **El enlace abre donde empieza el fragmento.** A veces es la página anterior a la de la parte principal, porque el fragmento arranca con 50 palabras repetidas del anterior.
+- **Si el navegador está configurado para descargar los PDF, `#page` no hace nada.** El archivo se baja y se abre desde el principio.
+- **Un error al abrir se ve como JSON.** Si el documento se borró o la base de origen está apagada, la pestaña nueva muestra el error tal como lo devuelve la API, sin el formato de las páginas.
+- **Un importado puede tardar en abrir.** Con la base de origen lenta, hasta 300 segundos.
+- **Una respuesta vieja puede abrir un PDF nuevo.** Si un documento se reemplaza mientras hay una respuesta en pantalla, sus enlaces abren el PDF nuevo en la página del viejo.
+- **El PDF se lee entero de SQL en cada clic.** No se guarda una copia, ni en la API ni en el navegador.
+- **No se probó el clic contra un visor.** Se probó el pedido y los enlaces que arma la página. Que el visor salte a la página hay que mirarlo en Edge o Chrome. Tampoco se probó "Reprocesar todo" sobre la base entera.
+
 ## 8. Cómo comprobar que entendiste
 
 Con el proyecto andando, probá predecir qué va a pasar antes de hacerlo:
@@ -370,5 +420,6 @@ Con el proyecto andando, probá predecir qué va a pasar antes de hacerlo:
 4. Con documentos pendientes, frená la API con Ctrl+C y volvé a arrancarla: ¿qué pasa con el que estaba a medias?
 5. Cambiá `Conexiones:ColeccionQdrant` por otro nombre en `conexiones.json` y arrancá: ¿qué muestra la franja? ¿Cómo se arregla?
 6. Buscá en `rag.Consulta` tu última pregunta: ¿qué fragmentos se le pasaron al modelo?
+7. Hacé una pregunta y apretá una fuente que diga "páginas N a M": ¿en qué página abre? Buscá ese fragmento en `rag.Fragmento`: ¿qué tienen `Pagina` y `PaginaFin`?
 
-Si podés explicar los seis, podés explicar el proyecto.
+Si podés explicar los siete, podés explicar el proyecto.

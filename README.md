@@ -29,11 +29,13 @@ Una sola vez, desde la raíz del repo, se crea la base:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1
 ```
 
+Si a una base ya creada le faltan las columnas de la página, la franja lo avisa: se frena la API, se corre el mismo script, que las agrega sin tocar lo cargado, y después, en "Documentos", "Reprocesar todo".
+
 Después, cada vez: **doble clic en `iniciar.cmd`**. Arranca Qdrant si no está andando, arranca la API y abre el navegador en `http://127.0.0.1:5089/`. Se frena con Ctrl+C en esa ventana.
 
 Hay dos páginas:
 
-- **Preguntar** (`/`): la pregunta, el modo de búsqueda y la respuesta con sus fuentes.
+- **Preguntar** (`/`): la pregunta, el modo de búsqueda y la respuesta con sus fuentes. Cada fuente dice el archivo y la página, y con un clic abre el PDF en otra pestaña, en esa página.
 - **Documentos** (`/documentos.html`): se arrastran los PDF, se ve cuántos están listos y cuántos faltan, y se borran o se vuelven a procesar.
 
 Arriba de las dos hay una franja con un punto por cada pieza (SQL Server, Full-Text, los modelos, Qdrant): verde si anda, amarillo si anda a medias y rojo si no anda, con lo que hay que hacer.

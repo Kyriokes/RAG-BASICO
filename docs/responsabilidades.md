@@ -20,7 +20,7 @@ RAG-BASICO\
 ├─ RagBasico.Api\                  la API web
 │  ├─ Buscador.cs                  búsqueda por palabras, por significado e híbrida
 │  ├─ Cargador.cs                  procesa un documento, del PDF a los vectores
-│  ├─ Chunker.cs                   corta el texto en fragmentos por párrafos
+│  ├─ Chunker.cs                   corta el texto en fragmentos, con su página
 │  ├─ DetectorDeCaidas.cs          dice qué servicio no responde
 │  ├─ Documentos.cs                el registro de cada PDF con su estado
 │  ├─ ErrorDeServicio.cs           el error de un servidor
@@ -110,7 +110,7 @@ RAG-BASICO\
 ## RagBasico.Api\Buscador.cs
 
 - **Responsabilidad:** encontrar los fragmentos que mejor responden una pregunta: por palabras en SQL Server, por significado en Qdrant, o con las dos mezcladas.
-- **Contiene:** la clase `Buscador`, con la lista pública `Modos` (`palabras`, `vectores` e `hibrida`) y la constante `ModoPorDefecto` (`hibrida`).
+- **Contiene:** la clase `Buscador`, con la lista pública `Modos` (`palabras`, `vectores` e `hibrida`), la constante `ModoPorDefecto` (`hibrida`) y la constante privada `Columnas`: las columnas que traen las dos consultas de SQL, en el mismo orden y con los mismos nombres que el record `Fragmento`. Dapper arma el record con su constructor, y si no coinciden falla al ejecutar.
 - **Desde:** fase-2-rag-minimo.
 - **Cambió en:** fase-5-vectores, fase-6-hibrida, fase-7-qdrant, fase-9-local.
 
@@ -120,7 +120,7 @@ RAG-BASICO\
 - **Recibe en el constructor:** los clientes de `Ollama`, para el vector de la pregunta, y de `Qdrant`; y la configuración, de donde lee `Conexiones:SqlTextos` y `Rag:CandidatosHibrida`.
 - **La registra:** Program.cs, con `AddScoped`: un objeto nuevo por pedido HTTP.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-5-vectores (recibe el cliente de Ollama y busca por vectores), fase-6-hibrida (la híbrida, que pasa a ser el modo por defecto), fase-7-qdrant (Qdrant y el respaldo en SQL), fase-9-local (los vectores están solo en Qdrant: se van el modo `vectores-qdrant`, el respaldo en SQL y los avisos; lee la conexión de `Conexiones:SqlTextos`).
+- **Cambió en:** fase-5-vectores (recibe el cliente de Ollama y busca por vectores), fase-6-hibrida (la híbrida, que pasa a ser el modo por defecto), fase-7-qdrant (Qdrant y el respaldo en SQL), fase-9-local (los vectores están solo en Qdrant: se van el modo `vectores-qdrant`, el respaldo en SQL y los avisos; lee la conexión de `Conexiones:SqlTextos`; cada fragmento sale con el número de su documento y con su página).
 
 ### Buscador.ElegirModo(pedido)
 
@@ -156,11 +156,11 @@ RAG-BASICO\
 
 - **Qué hace:** busca en el Full-Text de SQL Server los fragmentos que mejor coinciden con las palabras de la pregunta. `FREETEXTTABLE` corta la pregunta en palabras, busca también sus plurales y conjugaciones, y le pone un puntaje (`RANK`) a cada fragmento. Se piden los 200 mejores y se devuelven los `topK` primeros. Solo cuentan los documentos en estado `listo`: uno a medio procesar todavía no tiene sus vectores. Por eso se piden 200 y no menos: si los primeros son de un documento a medio procesar, igual quedan otros para elegir.
 - **Recibe:** la pregunta, cuántos fragmentos devolver y el token de cancelación.
-- **Devuelve:** una lista de `Fragmento` (número, archivo y texto), del más relevante al menos relevante. Vacía si la pregunta está vacía o si ninguna palabra coincide.
+- **Devuelve:** una lista de `Fragmento` (su número, el número y el archivo del documento, la página donde empieza, la página donde termina si cruza a otra, y el texto), del más relevante al menos relevante. Vacía si la pregunta está vacía o si ninguna palabra coincide. Las columnas salen de la constante `Columnas`.
 - **Efectos:** lee `rag.Fragmento` y `rag.Documento`. No escribe nada.
 - **La llaman:** Buscador.BuscarAsync y Buscador.HibridaAsync.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-9-local (solo los documentos listos, y pide 200 candidatos en lugar de 50).
+- **Cambió en:** fase-9-local (solo los documentos listos, y pide 200 candidatos en lugar de 50; trae también el número del documento y las dos columnas de la página).
 
 ### Buscador.PorVectoresAsync(pregunta, topK, ct)
 
@@ -174,13 +174,13 @@ RAG-BASICO\
 
 ### Buscador.LeerFragmentosAsync(ids, ct)
 
-- **Qué hace:** trae de SQL Server los fragmentos de una lista de números, como la que devuelve Qdrant, y los deja en el mismo orden de la lista: SQL no los devuelve en ese orden. Un número que ya no existe en SQL, o que es de un documento que no está `listo`, se saltea.
+- **Qué hace:** trae de SQL Server los fragmentos de una lista de números, como la que devuelve Qdrant, y los deja en el mismo orden de la lista: SQL no los devuelve en ese orden. Un número que ya no existe en SQL, o que es de un documento que no está `listo`, se saltea. Trae las mismas columnas que Buscador.PorPalabrasAsync, las de la constante `Columnas`: así un fragmento sale igual por los dos caminos.
 - **Recibe:** los números de fragmento, del más cercano al más lejano, y el token de cancelación.
 - **Devuelve:** la lista de `Fragmento`, en el orden de los números.
 - **Efectos:** lee `rag.Fragmento` y `rag.Documento`.
 - **La llaman:** Buscador.PorVectoresAsync.
 - **Desde:** fase-7-qdrant.
-- **Cambió en:** fase-9-local (saltea los fragmentos de documentos que no están listos).
+- **Cambió en:** fase-9-local (saltea los fragmentos de documentos que no están listos; trae también el número del documento y las dos columnas de la página).
 
 ## RagBasico.Api\Cargador.cs
 
@@ -238,7 +238,7 @@ RAG-BASICO\
   2. Borra de Qdrant y de SQL lo que hubiera quedado de un intento anterior o de la versión anterior del PDF.
   3. Lee los bytes del PDF con Documentos.LeerContenidoAsync. Si no están, o no son un PDF, lo deja en `error`.
   4. Saca el texto con Cargador.SacarTexto, en otro hilo y con un tope de 5 minutos: un PDF mal armado puede dejar a PdfPig dando vueltas sin terminar. Si se pasa del tope, o el PDF está roto o tiene clave, queda en `error`; uno escaneado (Cargador.EsEscaneado), en `sin texto`.
-  5. Corta el texto con Chunker.Partir y guarda los fragmentos con Cargador.GuardarFragmentosAsync.
+  5. Corta el texto con Chunker.PartirPaginas, que recibe las páginas por separado y devuelve cada fragmento con la página donde empieza y la página donde termina, y guarda los fragmentos con Cargador.GuardarFragmentosAsync.
   6. Crea la colección si no existe, y de a lotes de `Rag:LoteVectores` le pide los vectores a Ollama y los sube a Qdrant, con el número de fragmento como id.
   7. Lo marca `listo` con Documentos.MarcarListoAsync, que solo marca si sigue siendo el mismo PDF. Si mientras tanto lo reemplazaron o lo borraron, descarta lo armado: borra sus puntos y sus fragmentos. Si Cargador.RevisarTexto encontró algo raro, queda anotado en el detalle como `texto dudoso`.
   - Si algo falla, borra los fragmentos que hubiera guardado, y después decide:
@@ -254,8 +254,8 @@ RAG-BASICO\
 
 ### Cargador.GuardarFragmentosAsync(pendiente, partes, ct)
 
-- **Qué hace:** guarda los fragmentos de un documento en una sola transacción. Cada uno empieza con `Documento: <nombre sin extensión>`, así la búsqueda también lo encuentra por el nombre. El `INSERT` devuelve el número de cada fragmento con `OUTPUT INSERTED.FragmentoId`.
-- **Recibe:** el documento, los textos de los fragmentos en orden y el token de cancelación.
+- **Qué hace:** guarda los fragmentos de un documento en una sola transacción. Cada uno empieza con `Documento: <nombre sin extensión>`, así la búsqueda también lo encuentra por el nombre. Con cada fragmento guarda la página donde empieza, en `Pagina`, y la página donde termina, en `PaginaFin`, solo si es otra: si el fragmento no cruza de página, `PaginaFin` queda en `NULL`. El `INSERT` devuelve el número de cada fragmento con `OUTPUT INSERTED.FragmentoId`.
+- **Recibe:** el documento, la lista de `Parte` (el texto de cada fragmento con sus dos páginas) en orden y el token de cancelación.
 - **Devuelve:** la lista de `FragmentoNuevo`: cada fragmento con su número y su texto.
 - **Efectos:** inserta filas en `rag.Fragmento`.
 - **La llaman:** Cargador.ProcesarAsync.
@@ -306,7 +306,7 @@ RAG-BASICO\
 
 - **Qué hace:** saca el texto de un PDF con PdfPig, página por página, en el orden en que se lee. PdfPig marca con una línea en blanco el espacio grande entre dos renglones, que es lo que el `Chunker` toma como cambio de párrafo. Si el PDF está roto o tiene clave, lanza el error de PdfPig.
 - **Recibe:** los bytes del PDF.
-- **Devuelve:** una lista con el texto de cada página. Una página escaneada viene vacía.
+- **Devuelve:** una lista con el texto de cada página. Una página escaneada viene vacía, pero ocupa su lugar en la lista: el número de página de cada fragmento sale de la posición.
 - **Efectos:** ninguno.
 - **La llaman:** Cargador.ProcesarAsync.
 - **Desde:** fase-9-local. Viene de `Indexador.LeerPdf`, que leía el PDF de una carpeta.
@@ -337,32 +337,46 @@ RAG-BASICO\
 
 ## RagBasico.Api\Chunker.cs
 
-- **Responsabilidad:** cortar el texto de un documento en fragmentos del tamaño justo para buscar y para pasarle al modelo, respetando los párrafos.
-- **Contiene:** la clase `Chunker`, con la constante pública `Version`, que entra en la huella de carga, y tres valores privados: `PalabrasDeParrafoCorto` (15), `Separadores` (los caracteres que separan palabras) y `LineaEnBlanco`, la expresión regular que reconoce dónde empieza un párrafo.
+- **Responsabilidad:** cortar el texto de un documento en fragmentos del tamaño justo para buscar y para pasarle al modelo, respetando los párrafos, y anotar en qué página del PDF empieza y termina cada uno.
+- **Contiene:** la clase `Chunker`, con la constante pública `Version` (`parrafos-1`), que entra en la huella de carga; tres valores privados: `PalabrasDeParrafoCorto` (15), `Separadores` (los caracteres que separan palabras) y `LineaEnBlanco`, la expresión regular que reconoce dónde empieza un párrafo; y su record privado `Palabra`, una palabra del texto con el número de la página donde está.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-4-carga.
+- **Cambió en:** fase-4-carga, fase-9-local.
 
 ### Clase Chunker
 
 - **Responsabilidad:** las funciones que cortan y cuentan palabras. Es estática: no guarda nada, solo transforma texto.
 - **Recibe en el constructor:** nada; una clase estática no tiene constructor.
-- **La registra:** nadie. Se usa directo: `Chunker.Partir(...)`.
+- **La registra:** nadie. Se usa directo: `Chunker.PartirPaginas(...)`.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-4-carga (corta por párrafos y tiene la constante `Version`).
+- **Cambió en:** fase-4-carga (corta por párrafos y tiene la constante `Version`), fase-9-local (recibe el texto página por página y cada fragmento sale con su página; `Version` sigue en `parrafos-1`, porque el corte es el mismo y la huella no tiene que cambiar).
 
 ### Chunker.Partir(texto, palabras, solapamiento)
 
-- **Qué hace:** corta el texto en fragmentos de hasta `palabras` palabras, juntando párrafos enteros mientras entren.
+- **Qué hace:** corta un texto suelto, sin páginas, con las mismas reglas que Chunker.PartirPaginas, y devuelve solo los textos. Es Chunker.PartirPaginas con una sola página.
+- **Recibe:** el texto, el tamaño máximo de cada fragmento en palabras y cuántas palabras repetir.
+- **Devuelve:** la lista con el texto de cada fragmento, en orden. Vacía si el texto no tiene palabras.
+- **Efectos:** ninguno.
+- **La llaman:** nadie dentro de la API: el `Cargador` usa Chunker.PartirPaginas. Hoy la usan solo las pruebas, que están fuera del repo.
+- **Desde:** fase-2-rag-minimo.
+- **Cambió en:** fase-4-carga (por párrafos, sin títulos sueltos ni fragmentos casi repetidos), fase-9-local (las reglas del corte pasan a Chunker.PartirPaginas, y esta la llama con una sola página).
+
+### Chunker.PartirPaginas(paginas, palabras, solapamiento)
+
+- **Qué hace:** corta el texto de un PDF, que llega con una página por elemento, en fragmentos de hasta `palabras` palabras, juntando párrafos enteros mientras entren. Cada fragmento sale con la página donde está su primera palabra y la página donde está la última.
   - Un párrafo que no entra cierra el fragmento antes de empezar, si el fragmento ya tiene la mitad del tamaño. Si tiene menos, el principio del párrafo lo completa: así no quedan fragmentos chicos.
   - Un párrafo más largo que el tamaño se corta en ventanas, como hacía la fase 2 con todo el texto.
   - Cada fragmento repite las últimas `solapamiento` palabras del anterior. Si al final quedan menos palabras nuevas que repetidas, se suman al último fragmento en lugar de abrir uno que sería casi una copia del anterior.
   - Si el solapamiento no es menor que la mitad del tamaño, lo ignora.
-- **Recibe:** el texto, el tamaño máximo de cada fragmento en palabras y cuántas palabras repetir.
-- **Devuelve:** la lista de fragmentos, en orden. Vacía si el texto no tiene palabras. El último puede pasar el tamaño por menos palabras que el solapamiento.
+  - Las páginas se numeran desde 1, en el orden del PDF: es el número que muestra el visor del navegador, no el que está impreso en la hoja. Una página sin texto también cuenta.
+  - La página de inicio es la de la primera palabra del fragmento, contando las palabras repetidas del anterior. Por eso a veces es la página anterior a la de la parte principal.
+  - Cuando las últimas palabras se suman al último fragmento, ese fragmento conserva su página de inicio y pasa a terminar en la página de la última palabra sumada.
+  - El corte es el mismo que daba unir las páginas con una línea en blanco y cortar todo junto, como se hacía antes: por eso `Version` no cambia.
+- **Recibe:** el texto de cada página, en orden; el tamaño máximo de cada fragmento en palabras; y cuántas palabras repetir.
+- **Devuelve:** la lista de `Parte`, en orden: el texto de cada fragmento con sus dos páginas. Si el fragmento no cruza de página, las dos son la misma. Vacía si el texto no tiene palabras. El último puede pasar el tamaño por menos palabras que el solapamiento.
 - **Efectos:** ninguno.
-- **La llaman:** Cargador.ProcesarAsync.
-- **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-4-carga (por párrafos, sin títulos sueltos ni fragmentos casi repetidos).
+- **La llaman:** Cargador.ProcesarAsync y Chunker.Partir.
+- **Desde:** fase-9-local. Tiene las reglas que hasta acá estaban en Chunker.Partir.
+- **Cambió en:** nada todavía.
 
 ### Chunker.ContarPalabras(texto)
 
@@ -374,24 +388,44 @@ RAG-BASICO\
 - **Desde:** fase-2-rag-minimo.
 - **Cambió en:** nada todavía.
 
-### Chunker.SepararParrafos(texto)
+### Chunker.SepararParrafos(paginas)
 
-- **Qué hace:** separa el texto en párrafos por las líneas en blanco, que es como PdfPig marca un espacio grande entre dos renglones, y parte cada párrafo en palabras. Un párrafo de menos de 15 palabras, como un título o un número de página, se pega al que le sigue: así nunca queda solo en un fragmento ni al final del fragmento anterior, separado de su texto.
-- **Recibe:** el texto.
-- **Devuelve:** la lista de párrafos, cada uno como un arreglo de palabras. Vacía si el texto no tiene palabras.
+- **Qué hace:** recorre las páginas en orden y separa el texto de cada una en párrafos por las líneas en blanco, que es como PdfPig marca un espacio grande entre dos renglones. Parte cada párrafo en palabras y a cada palabra le anota el número de su página, contado desde 1. Un párrafo de menos de 15 palabras, como un título o un número de página, se pega al que le sigue: así nunca queda solo en un fragmento ni al final del fragmento anterior, separado de su texto. Se pega aunque el que le sigue esté en la página siguiente: un título al pie de una página queda con el párrafo que abre la otra.
+- **Recibe:** el texto de cada página, en orden.
+- **Devuelve:** la lista de párrafos, cada uno como un arreglo de `Palabra`. Vacía si el texto no tiene palabras.
 - **Efectos:** ninguno.
-- **La llaman:** Chunker.Partir.
+- **La llaman:** Chunker.PartirPaginas.
 - **Desde:** fase-4-carga.
-- **Cambió en:** nada todavía.
+- **Cambió en:** fase-9-local (recibe las páginas en lugar del texto entero, y cada palabra sale con su página).
 
 ### Chunker.Cerrar(fragmentos, actual, solapamiento)
 
-- **Qué hace:** cierra el fragmento que se está armando: lo agrega a la lista y deja en `actual` solo sus últimas `solapamiento` palabras, que abren el fragmento siguiente.
-- **Recibe:** la lista de fragmentos, las palabras del fragmento que se está armando y cuántas repetir.
+- **Qué hace:** cierra el fragmento que se está armando: lo arma con Chunker.ArmarParte, lo agrega a la lista y deja en `actual` solo sus últimas `solapamiento` palabras, que abren el fragmento siguiente.
+- **Recibe:** la lista de `Parte`, las palabras del fragmento que se está armando, cada una con su página, y cuántas repetir.
 - **Devuelve:** nada. Cambia las dos listas que recibe.
 - **Efectos:** ninguno fuera de esas dos listas.
-- **La llaman:** Chunker.Partir.
+- **La llaman:** Chunker.PartirPaginas.
 - **Desde:** fase-4-carga.
+- **Cambió en:** fase-9-local (las listas son de `Parte` y de `Palabra`, no de textos).
+
+### Chunker.ArmarParte(palabras)
+
+- **Qué hace:** arma un fragmento con sus palabras: el texto, que une con Chunker.Unir, la página de la primera palabra y la página de la última.
+- **Recibe:** las palabras del fragmento, cada una con su página. Tiene que haber al menos una.
+- **Devuelve:** la `Parte`.
+- **Efectos:** ninguno.
+- **La llaman:** Chunker.PartirPaginas y Chunker.Cerrar.
+- **Desde:** fase-9-local.
+- **Cambió en:** nada todavía.
+
+### Chunker.Unir(palabras)
+
+- **Qué hace:** une las palabras con un espacio entre una y otra, sin las páginas.
+- **Recibe:** la lista de `Palabra`.
+- **Devuelve:** el texto.
+- **Efectos:** ninguno.
+- **La llaman:** Chunker.PartirPaginas y Chunker.ArmarParte.
+- **Desde:** fase-9-local.
 - **Cambió en:** nada todavía.
 
 ## RagBasico.Api\DetectorDeCaidas.cs
@@ -422,7 +456,7 @@ RAG-BASICO\
 
 ## RagBasico.Api\Documentos.cs
 
-- **Responsabilidad:** el registro de los documentos: anota los que llegan, dice cuál sigue, guarda el estado de cada uno, los lista y los borra. No procesa: eso lo hace el `Cargador`.
+- **Responsabilidad:** el registro de los documentos: anota los que llegan, dice cuál sigue, guarda el estado de cada uno, los lista, los borra y devuelve el PDF de uno para abrirlo. No procesa: eso lo hace el `Cargador`.
 - **Contiene:** la clase `Documentos`, con la lista pública `Estados` (`pendiente`, `listo`, `sin texto` y `error`); el `Turno`, un `SemaphoreSlim` de un solo lugar que comparten el `Cargador`, borrar y reprocesar, para no pisarse; la constante pública `IntentosMaximos` (3), cuántas veces se intenta procesar un documento antes de dejarlo en `error`; las constantes privadas `PorPagina` (50) y `EsperaDeOrigen` (300 segundos, lo que se espera a la base de origen: un PDF grande por la red puede tardar más que los 30 de siempre); y tres records privados: `DeOrigen`, un documento de la lista de la base de origen, con su número y su nombre; `Anterior`, un documento que ya estaba cargado con el mismo nombre; y `Cuenta`, los números de la base que arman el resumen.
 - **Desde:** fase-9-local.
 - **Cambió en:** nada todavía.
@@ -441,7 +475,7 @@ RAG-BASICO\
 - **Recibe:** los bytes del archivo.
 - **Devuelve:** `true` si es un PDF.
 - **Efectos:** ninguno.
-- **La llaman:** Documentos.AnotarSubidosAsync y Cargador.ProcesarAsync.
+- **La llaman:** Documentos.AnotarSubidosAsync, Cargador.ProcesarAsync y el endpoint `GET /documentos/{id:int}/pdf`.
 - **Desde:** fase-9-local.
 - **Cambió en:** nada todavía.
 
@@ -515,11 +549,21 @@ RAG-BASICO\
 
 ### Documentos.LeerContenidoAsync(pendiente, ct)
 
-- **Qué hace:** trae los bytes del PDF. Si se arrastró, de la columna `Contenido` de la base del RAG. Si se importó, de la base de origen, con la consulta de `Conexiones:ConsultaContenido`, que recibe el número en el parámetro `@Id`, y esperando hasta 300 segundos. Si la base de origen falla, lanza el error que arma Documentos.ErrorDeOrigen. Si hay un importado pendiente y `Conexiones:SqlOrigen` está vacía, lanza un `ErrorDeServicio` con código 503.
-- **Recibe:** el documento pendiente y el token de cancelación.
+- **Qué hace:** trae los bytes del PDF. Si se arrastró, de la columna `Contenido` de la base del RAG. Si se importó, de la base de origen, con la consulta de `Conexiones:ConsultaContenido`, que recibe el número en el parámetro `@Id`, y esperando hasta 300 segundos. Si la base de origen falla, lanza el error que arma Documentos.ErrorDeOrigen. Si el documento es un importado y `Conexiones:SqlOrigen` está vacía, lanza un `ErrorDeServicio` con código 503, que dice que los PDF de los importados no se pueden leer.
+- **Recibe:** el documento, como un `Pendiente`, y el token de cancelación. No hace falta que siga pendiente: Documentos.LeerPdfAsync la llama con un documento en cualquier estado.
 - **Devuelve:** los bytes, o `null` si la fila ya no está o no tiene binario.
 - **Efectos:** lee `rag.Documento` o la base de origen.
-- **La llaman:** Cargador.ProcesarAsync.
+- **La llaman:** Cargador.ProcesarAsync y Documentos.LeerPdfAsync.
+- **Desde:** fase-9-local.
+- **Cambió en:** nada todavía.
+
+### Documentos.LeerPdfAsync(documentoId, ct)
+
+- **Qué hace:** trae el PDF de un documento para abrirlo, esté en el estado que esté. Busca el documento en `rag.Documento` y lee sus bytes con Documentos.LeerContenidoAsync, del mismo lugar que cuando se lo procesa: la columna `Contenido` si se arrastró, la base de origen si se importó. No guarda nada en memoria entre un pedido y otro: lee el PDF entero cada vez. Si la base de origen falla o no está configurada, sale el error de Documentos.LeerContenidoAsync.
+- **Recibe:** el número del documento y el token de cancelación.
+- **Devuelve:** un `PdfGuardado`, con el nombre del archivo y los bytes; con los bytes en `null` si el documento existe pero no hay PDF; o `null` si el documento no existe.
+- **Efectos:** lee `rag.Documento` y, en un importado, la base de origen. No escribe nada.
+- **La llaman:** el endpoint `GET /documentos/{id:int}/pdf`.
 - **Desde:** fase-9-local.
 - **Cambió en:** nada todavía.
 
@@ -596,10 +640,11 @@ RAG-BASICO\
 ### Documentos.ReprocesarTodoAsync(ct)
 
 - **Qué hace:** rehace todo desde los PDF, en este orden.
+  0. Controla que la tabla `rag.Fragmento` tenga las columnas de la página. Si faltan, porque la base se creó antes y no se actualizó, no borra nada y lanza un error que dice que se corra `sqlase.sql`: sin esas columnas el `Cargador` no podría guardar ningún fragmento y la base quedaría vacía.
   1. Deja todos los documentos en `pendiente`, con los intentos en 0. Desde acá ninguno aparece en las búsquedas, y si lo que sigue se corta, lo rehace el `Cargador`, que borra lo viejo de cada documento antes de procesarlo.
   2. Borra todos los fragmentos, de a 20.000: un solo borrado de un millón de filas tarda demasiado y traba la tabla.
   3. Borra la colección de Qdrant, si existe.
-  - Espera el turno (`Documentos.Turno`) y le da hasta 10 minutos a cada comando de SQL. Sirve cuando cambia la forma de cortar, o cuando Qdrant y la base no coinciden.
+  - Espera el turno (`Documentos.Turno`) y le da hasta 10 minutos a cada comando de SQL. Sirve cuando cambia la forma de cortar, cuando Qdrant y la base no coinciden, o para que los fragmentos cargados antes de que se guardara la página la tengan. Mientras dura, las preguntas no encuentran nada.
 - **Recibe:** el token de cancelación.
 - **Devuelve:** cuántos documentos quedaron pendientes.
 - **Efectos:** actualiza todas las filas de `rag.Documento`, borra todas las de `rag.Fragmento` y borra la colección de Qdrant.
@@ -748,11 +793,19 @@ RAG-BASICO\
 | `RespuestaModelo` | `Texto` | `string` | Lo que escribió el modelo |
 | `RespuestaModelo` | `MsCarga`, `MsLectura`, `MsEscritura` | `int` | Lo que tardó Ollama en cargar el modelo (0 si ya estaba), en leer el pedido y en escribir la respuesta |
 | `RespuestaModelo` | `TokensPregunta`, `TokensRespuesta` | `int` | Cuántos tokens leyó y cuántos escribió |
+| `Parte` | `Texto` | `string` | El texto de un fragmento recién cortado por el `Chunker`, todavía sin el `Documento: <nombre>` de adelante |
+| `Parte` | `Pagina`, `PaginaFin` | `int` | La página del PDF donde está su primera palabra y la página donde está la última, contadas desde 1. Si no cruza de página, las dos son la misma |
 | `Fragmento` | `FragmentoId` | `int` | El número del fragmento en `rag.Fragmento` |
-| `Fragmento` | `Archivo` | `string` | El PDF de donde salió |
+| `Fragmento` | `DocumentoId`, `Archivo` | `int`, `string` | El número y el PDF del documento de donde salió |
+| `Fragmento` | `Pagina` | `int?` | La página del PDF donde empieza, contada desde 1; `null` en un fragmento cargado antes de que se guardara la página |
+| `Fragmento` | `PaginaFin` | `int?` | La página donde termina, solo si cruza a otra; si no cruza, `null` |
 | `Fragmento` | `Texto` | `string` | El texto, que empieza con `Documento: <nombre>` |
 | `Fuente` | `Numero` | `int` | El número con que la cita el modelo: `[1]`, `[2]`... |
-| `Fuente` | `Archivo`, `FragmentoId` | `string`, `int` | El PDF y el fragmento exacto |
+| `Fuente` | `DocumentoId`, `Archivo` | `int`, `string` | El número y el PDF del documento. Con el número, la página arma el enlace que abre el PDF |
+| `Fuente` | `Pagina`, `PaginaFin` | `int?` | La página donde empieza el fragmento y la página donde termina si cruza a otra, como en `Fragmento` |
+| `Fuente` | `FragmentoId` | `int` | El fragmento exacto |
+| `PdfGuardado` | `Archivo` | `string` | El nombre del archivo del documento |
+| `PdfGuardado` | `Contenido` | `byte[]?` | Los bytes del PDF; `null` si el documento no tiene el PDF guardado o ya no está en la base de origen |
 | `RespuestaRag` | `Texto` | `string` | La respuesta, o la frase de "no encontré" |
 | `RespuestaRag` | `Fuentes` | `List<Fuente>` | Las fuentes, en el orden en que se le pasaron al modelo. Vacía si no encontró |
 | `RespuestaRag` | `MsBusqueda`, `MsModelo` | `int` | Lo que tardó la búsqueda y lo que tardó el modelo, medido desde la API |
@@ -907,7 +960,7 @@ RAG-BASICO\
   - **Errores:** `UseExceptionHandler` va primero en el camino de cada pedido: si algo lanza un error que nadie atrapó, lo atiende el `ManejadorDeErrores`. `UseStatusCodePages` le pone un cuerpo ProblemDetails a las respuestas de error que salen vacías, como un 404 (una ruta que no existe), un 405 (un método que no corresponde) o un 415 (un cuerpo que no es JSON).
   - **Origen:** un paso propio, declarado con `app.Use`, por el que pasan todos los pedidos antes de llegar a las páginas y a los endpoints. A los que cambian algo (`POST`, `DELETE`) les mira el encabezado `Origin`, donde el navegador manda la dirección de la página que hace el pedido: si no es la de la propia API, responde 403 y no sigue. Así una página cualquiera de internet, abierta en esta PC, no puede subir, borrar ni reprocesar documentos. Un pedido sin `Origin`, como los de `RagBasico.Api.http`, no viene de una página y pasa. Se completa con `AllowedHosts` en `appsettings.json`, que rechaza los pedidos que no vienen dirigidos a `127.0.0.1` o a `localhost`.
   - **Páginas:** `UseDefaultFiles` hace que la raíz, `/`, devuelva `wwwroot\index.html`, y `UseStaticFiles` sirve los archivos de `wwwroot`. Por eso la información del proyecto está en `/info`.
-  - **Endpoints:** cada `app.MapGet(...)`, `app.MapPost(...)` o `app.MapDelete(...)` asocia una ruta con la función que la atiende. `GET /buscar` y `POST /preguntar` controlan la pregunta con Validador.RevisarPregunta (con el máximo de `Rag:LargoMaximoPregunta`) y el modo con Buscador.ElegirModo; si algo no sirve, devuelven `Results.Problem` con código 400 y el motivo.
+  - **Endpoints:** cada `app.MapGet(...)`, `app.MapPost(...)` o `app.MapDelete(...)` asocia una ruta con la función que la atiende. `GET /buscar` y `POST /preguntar` controlan la pregunta con Validador.RevisarPregunta (con el máximo de `Rag:LargoMaximoPregunta`) y el modo con Buscador.ElegirModo; si algo no sirve, devuelven `Results.Problem` con código 400 y el motivo. `GET /documentos/{id:int}/pdf` es el único que no devuelve JSON: devuelve un PDF, con los encabezados para que el navegador lo muestre en su visor.
   - **Arranque:** `app.Run()` deja la API escuchando en la dirección de `launchSettings.json` hasta que se la frena con Ctrl+C.
 - **Ya no controla nada al arrancar:** hasta la fase 8, si faltaba la base o un modelo la API no arrancaba. Ahora arranca siempre, y lo que falta lo muestra `GET /salud` en la franja de estado de las páginas, con qué servidor es y qué hacer.
 - **Desde:** fase-0-base.
@@ -945,6 +998,14 @@ RAG-BASICO\
 - **Desde:** fase-9-local.
 - **Cambió en:** nada todavía.
 
+### GET /documentos/{id:int}/pdf
+
+- **Recibe:** el número del documento en la ruta. Las fuentes de una respuesta enlazan acá con `#page=N` al final de la dirección; esa parte no llega a la API: la usa el visor del navegador para ir a la página.
+- **Devuelve:** el PDF (`application/pdf`), de un documento en cualquier estado, con tres encabezados: `Content-Disposition: inline` con el nombre del archivo, para que el navegador lo muestre en su visor en lugar de descargarlo; `X-Content-Type-Options: nosniff`, para que lo trate como PDF y como nada más; y `Cache-Control: no-store`, porque el PDF de un documento se puede reemplazar. Un error 404 si no existe el documento, si no hay PDF (no está guardado, o ya no está en la base de origen) o si lo guardado no es un PDF. Si falla la base de origen, el 502 o el 503 que arma el `ManejadorDeErrores`. Los errores salen como ProblemDetails, así que en la pestaña que abrió el enlace se ven como JSON.
+- **La atiende:** una función de `Program.cs` que llama a Documentos.LeerPdfAsync, controla los bytes con Documentos.EsPdf, escribe el nombre en el encabezado con `SetHttpFileName`, que lo deja bien también con tildes, eñes o comillas, y responde con `Results.File`.
+- **Desde:** fase-9-local.
+- **Cambió en:** nada todavía.
+
 ### DELETE /documentos/{id:int}
 
 - **Recibe:** el número del documento en la ruta. `{id:int}` hace que la ruta solo coincida si es un número entero.
@@ -964,7 +1025,7 @@ RAG-BASICO\
 ### POST /documentos/reprocesar
 
 - **Recibe:** nada.
-- **Devuelve:** un JSON con `cuantos`: cuántos documentos quedaron pendientes para procesar de nuevo. Antes borra la colección de Qdrant y todos los fragmentos.
+- **Devuelve:** un JSON con `cuantos`: cuántos documentos quedaron pendientes para procesar de nuevo. Antes borra la colección de Qdrant y todos los fragmentos. Si a la base le faltan las columnas de la página, un 502 que dice que se corra `sql\base.sql`, sin borrar nada.
 - **La atiende:** una función de `Program.cs` que llama a Documentos.ReprocesarTodoAsync.
 - **Desde:** fase-9-local.
 - **Cambió en:** nada todavía.
@@ -972,18 +1033,18 @@ RAG-BASICO\
 ### GET /buscar
 
 - **Recibe:** la pregunta en el parámetro `q` de la dirección y, si se quiere, el modo en `modo`: `palabras`, `vectores` o `hibrida`, que es el modo por defecto. Por ejemplo: `/buscar?q=requisitos reintegro&modo=vectores`.
-- **Devuelve:** la lista de `Fragmento` encontrados con ese modo, hasta `Rag:TopK`. Si falta `q`, si la pregunta no sirve (vacía, más larga que `Rag:LargoMaximoPregunta`, sin letras) o si el modo no existe, un error 400 con el motivo. Con `vectores` o `hibrida` y Qdrant apagado, un 503 que dice que Qdrant no responde.
+- **Devuelve:** la lista de `Fragmento` encontrados con ese modo, hasta `Rag:TopK`, cada uno con el número de su documento y su página. Si falta `q`, si la pregunta no sirve (vacía, más larga que `Rag:LargoMaximoPregunta`, sin letras) o si el modo no existe, un error 400 con el motivo. Con `vectores` o `hibrida` y Qdrant apagado, un 503 que dice que Qdrant no responde.
 - **La atiende:** una función de `Program.cs` que controla el modo con Buscador.ElegirModo y llama a Buscador.BuscarAsync.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-5-vectores (el parámetro `modo`), fase-6-hibrida (la híbrida, que pasa a ser el modo por defecto), fase-7-qdrant (el modo `vectores-qdrant`, y devuelve un objeto con el aviso en lugar de la lista sola), fase-8-validaciones (valida la pregunta, y los errores salen como ProblemDetails), fase-9-local (quedan tres modos y vuelve a devolver la lista sola).
+- **Cambió en:** fase-5-vectores (el parámetro `modo`), fase-6-hibrida (la híbrida, que pasa a ser el modo por defecto), fase-7-qdrant (el modo `vectores-qdrant`, y devuelve un objeto con el aviso en lugar de la lista sola), fase-8-validaciones (valida la pregunta, y los errores salen como ProblemDetails), fase-9-local (quedan tres modos y vuelve a devolver la lista sola; cada fragmento trae `documentoId`, `pagina` y `paginaFin`).
 
 ### POST /preguntar
 
 - **Recibe:** un JSON con la pregunta y, si se quiere, el modo: `{ "pregunta": "...", "modo": "palabras" }`, que ASP.NET Core convierte en un `PedidoPregunta`. Sin modo, usa la híbrida.
-- **Devuelve:** el `RespuestaRag`: la respuesta de Qwen con citas `[n]`, las fuentes y los tiempos. Si los documentos no alcanzan, la frase "No encontré esa información en los documentos." sin fuentes. Si la pregunta no sirve o el modo no existe, un error 400 con el motivo; si un servicio no responde, un 503 que dice cuál.
+- **Devuelve:** el `RespuestaRag`: la respuesta de Qwen con citas `[n]`, las fuentes y los tiempos. Cada fuente trae el número del documento y la página donde empieza el fragmento, que es con lo que la página arma el enlace al PDF. Si los documentos no alcanzan, la frase "No encontré esa información en los documentos." sin fuentes. Si la pregunta no sirve o el modo no existe, un error 400 con el motivo; si un servicio no responde, un 503 que dice cuál.
 - **La atiende:** una función de `Program.cs` que controla el modo con Buscador.ElegirModo y llama a Redactor.ResponderAsync.
 - **Desde:** fase-1-ollama.
-- **Cambió en:** fase-2-rag-minimo (responde con los documentos, no con lo que sabe Qwen), fase-5-vectores (el modo), fase-6-hibrida (la híbrida por defecto), fase-7-qdrant (el aviso), fase-8-validaciones (valida la pregunta, y los errores salen como ProblemDetails), fase-9-local (quedan tres modos y se va el aviso).
+- **Cambió en:** fase-2-rag-minimo (responde con los documentos, no con lo que sabe Qwen), fase-5-vectores (el modo), fase-6-hibrida (la híbrida por defecto), fase-7-qdrant (el aviso), fase-8-validaciones (valida la pregunta, y los errores salen como ProblemDetails), fase-9-local (quedan tres modos y se va el aviso; cada fuente trae `documentoId`, `pagina` y `paginaFin`).
 
 ### GET /salud
 
@@ -991,7 +1052,7 @@ RAG-BASICO\
 - **Devuelve:** el `InformeSalud`: el estado general y los chequeos (SQL Server, Full-Text, modelos de Ollama, dimensión de los vectores, Qdrant y, si está configurada, la base de origen). Con estado `error`, el código HTTP es 503, pero igual trae el informe; con `aviso` u `ok`, 200. Es lo que dibuja la franja de estado de las dos páginas.
 - **La atiende:** una función de `Program.cs` que llama a Salud.RevisarAsync.
 - **Desde:** fase-7-qdrant.
-- **Cambió en:** fase-9-local (el chequeo de la base de origen; cada chequeo dice qué dirección probó; Qdrant apagado pasa de aviso a error).
+- **Cambió en:** fase-9-local (el chequeo de la base de origen; cada chequeo dice qué dirección probó; Qdrant apagado pasa de aviso a error; el chequeo de SQL Server da error si a `rag.Fragmento` le faltan las columnas de la página).
 
 ## RagBasico.Api\Properties\launchSettings.json
 
@@ -1159,7 +1220,7 @@ RAG-BASICO\
 ## RagBasico.Api\RagBasico.Api.http
 
 - **Responsabilidad:** los pedidos de prueba de la fase, listos para mandar con "Send Request" desde Visual Studio, o desde VS Code con la extensión "REST Client".
-- **Contiene:** la variable `@host`, con la dirección y el puerto de la fase, y un pedido por cada endpoint de esta versión.
+- **Contiene:** la variable `@host`, con la dirección y el puerto de la fase, y un pedido por cada endpoint de esta versión, también el que abre el PDF de un documento, `GET /documentos/1/pdf`.
 - **Desde:** fase-0-base.
 - **Cambió en:** fase-1-ollama, fase-2-rag-minimo, fase-3-medicion, fase-4-carga, fase-5-vectores, fase-6-hibrida, fase-7-qdrant, fase-8-validaciones, fase-9-local.
 
@@ -1182,11 +1243,11 @@ RAG-BASICO\
 
 - **Qué hace:** busca los fragmentos de la pregunta con el modo pedido y le pide la respuesta a Qwen. Si no hay fragmentos, responde la frase fija sin llamar al modelo; por vectores casi nunca pasa, así que el "no sé" lo decide Qwen. Si Qwen responde la frase de "no encontré", la devuelve sin fuentes. Al final registra la consulta, con el modo.
 - **Recibe:** la pregunta, el modo de búsqueda y el token de cancelación.
-- **Devuelve:** un `RespuestaRag`: el texto, las fuentes numeradas como las cita el modelo y los tiempos.
+- **Devuelve:** un `RespuestaRag`: el texto, las fuentes numeradas como las cita el modelo y los tiempos. Cada `Fuente` lleva el número del documento, el archivo, la página donde empieza el fragmento, la página donde termina si cruza a otra, y el número del fragmento. La página va solo en la fuente: al modelo no se le dice.
 - **Efectos:** busca con el buscador (SQL Server, Ollama y Qdrant según el modo), llama a Ollama para redactar y escribe una fila en `rag.Consulta`.
 - **La llaman:** el endpoint `POST /preguntar`.
 - **Desde:** fase-2-rag-minimo.
-- **Cambió en:** fase-3-medicion (registra la consulta), fase-5-vectores (recibe el modo), fase-7-qdrant (pasa el aviso de la búsqueda), fase-9-local (ya no hay aviso: la búsqueda devuelve la lista sola).
+- **Cambió en:** fase-3-medicion (registra la consulta), fase-5-vectores (recibe el modo), fase-7-qdrant (pasa el aviso de la búsqueda), fase-9-local (ya no hay aviso: la búsqueda devuelve la lista sola; cada fuente lleva el número del documento y la página).
 
 ### Redactor.ArmarMensaje(pregunta, fragmentos)
 
@@ -1290,13 +1351,13 @@ RAG-BASICO\
 
 ### Salud.RevisarSqlAsync(ct)
 
-- **Qué hace:** se conecta a la base del RAG y cuenta los documentos listos, los pendientes, los que quedaron sin cargar (`error` o `sin texto`) y los fragmentos. Avisa si todavía no hay documentos listos. Si falla, dice qué pasó según el número de error de SQL Server: 208, faltan las tablas; 4060, no existe la base o el usuario no tiene permiso; cualquier otro, no se pudo conectar. En los dos primeros dice que hay que correr `sql\base.sql`.
+- **Qué hace:** se conecta a la base del RAG y primero controla, con `COL_LENGTH`, que la tabla `rag.Fragmento` tenga las columnas `Pagina` y `PaginaFin`. Una base creada antes de que se guardara la página no las tiene, y buscar y cargar fallarían: entonces da `error` y dice de correr `sql\base.sql` en ese servidor (en casa, `scripts\crear-base.ps1`), que las agrega sin tocar lo cargado. Si están, cuenta los documentos listos, los pendientes, los que quedaron sin cargar (`error` o `sin texto`) y los fragmentos. Avisa si todavía no hay documentos listos. Si falla, dice qué pasó según el número de error de SQL Server: 208, faltan las tablas; 4060, no existe la base o el usuario no tiene permiso; cualquier otro, no se pudo conectar. En los dos primeros dice que hay que correr `sql\base.sql`.
 - **Recibe:** el token de cancelación.
 - **Devuelve:** un `Chequeo`: `ok`, `aviso` o `error`.
 - **Efectos:** lee `rag.Documento` y `rag.Fragmento`.
 - **La llaman:** Salud.RevisarAsync.
 - **Desde:** fase-7-qdrant.
-- **Cambió en:** fase-8-validaciones (dice qué revisar), fase-9-local (cuenta por estado, nombra el servidor y la base, y distingue la base que falta de las tablas que faltan).
+- **Cambió en:** fase-8-validaciones (dice qué revisar), fase-9-local (cuenta por estado, nombra el servidor y la base, y distingue la base que falta de las tablas que faltan; avisa si faltan las columnas de la página).
 
 ### Salud.RevisarFullTextAsync(ct)
 
@@ -1440,10 +1501,12 @@ RAG-BASICO\
   - manda la pregunta y el modo a `POST /preguntar` con `fetch`;
   - muestra el texto con `textContent` y no con `innerHTML`, así el texto de un documento nunca se interpreta como HTML;
   - lista las fuentes y atenúa las que se le pasaron al modelo pero no citó;
+  - hace de cada fuente un enlace a `GET /documentos/{id}/pdf`, que abre el PDF en otra pestaña (`target="_blank"`, con `rel="noopener"`), en el visor del navegador. Si la fuente tiene página, la dirección termina en `#page=N`, y el visor va a la página donde empieza el fragmento;
+  - escribe la fuente de tres maneras: `archivo, página 3 (fragmento 41)`; `archivo, páginas 3 a 4 (fragmento 41)`, si el fragmento termina en otra página; o `archivo (fragmento 41)`, si el fragmento se cargó antes de que se guardara la página. En ese caso el enlace abre el PDF desde el principio;
   - no muestra el bloque de fuentes cuando la respuesta es "no encontré", porque cinco documentos debajo de "no encontré" confunden;
   - muestra el error de la API, con el título y el detalle del ProblemDetails, por ejemplo el de un servicio que no responde.
 - **Desde:** fase-6-hibrida.
-- **Cambió en:** fase-7-qdrant (el modo con Qdrant y el aviso), fase-9-local (quedan tres modos, se va el aviso, suma la franja de estado y el enlace a Documentos, y el estilo común pasa a `estilos.css`).
+- **Cambió en:** fase-7-qdrant (el modo con Qdrant y el aviso), fase-9-local (quedan tres modos, se va el aviso, suma la franja de estado y el enlace a Documentos, y el estilo común pasa a `estilos.css`; cada fuente es un enlace que abre el PDF en su página).
 
 ## RagBasico.slnx
 
@@ -1646,7 +1709,7 @@ RAG-BASICO\
   - La base, si no existe, y el esquema `rag`.
   - La tabla `rag.Documento`: un registro por PDF, con su estado (`pendiente`, `listo`, `sin texto` o `error`). Un PDF arrastrado guarda sus bytes en `Contenido` y no tiene `OrigenId`; uno importado guarda su número de la base de origen en `OrigenId` y no guarda los bytes. La columna `Intentos` cuenta cuántas veces se empezó a procesar un documento sin terminar: con 3, queda en `error`, así uno que cuelga el proceso no frena a los demás. Si la base se creó antes de que existiera esa columna, el script la agrega.
   - Tres índices sobre `rag.Documento`: `UX_rag_Documento_Archivo`, para que entre los arrastrados no haya dos con el mismo nombre; `UX_rag_Documento_OrigenId`, para que entre los importados no haya dos con el mismo número; e `IX_rag_Documento_Estado`, para encontrar rápido el próximo pendiente. Los dos primeros son índices filtrados (con `WHERE`), y por eso el script prende `QUOTED_IDENTIFIER`.
-  - La tabla `rag.Fragmento`, con borrado en cascada al borrar su documento, y el índice `IX_rag_Fragmento_Documento`.
+  - La tabla `rag.Fragmento`, con borrado en cascada al borrar su documento, y el índice `IX_rag_Fragmento_Documento`. La columna `Pagina` es la página del PDF, contada desde 1, donde está la primera palabra del fragmento, y `PaginaFin`, la página donde termina, solo si cruza a otra: si no cruza, queda en `NULL`. Si la base se creó antes de que existieran esas dos columnas, el script las agrega, cada una en su lote, sin tocar lo cargado. Los fragmentos que ya estaban quedan con `Pagina` en `NULL` hasta apretar "Reprocesar todo" en la página de documentos.
   - El catálogo `ftRag`, sin distinguir acentos, y el índice Full-Text sobre `rag.Fragmento.Texto`, en español (3082) y con actualización automática.
   - La tabla `rag.Consulta`, el registro de cada pregunta.
 - **Variables sqlcmd:** `Base`, el nombre de la base. Lo pasa `scripts\crear-base.ps1`; en SSMS se define con `:setvar Base RagBasico` en modo SQLCMD.
@@ -1659,7 +1722,8 @@ RAG-BASICO\
   - cuántos documentos hay en cada estado, cuántos fragmentos y tres fragmentos al azar;
   - los 100 documentos más nuevos, con su estado, de dónde vinieron (`OrigenId`), cuántos fragmentos tienen y cuánto ocupa el PDF guardado;
   - los documentos que no se pudieron cargar, con el motivo, y los que quedaron listos con el texto dudoso;
-  - los fragmentos de un documento, para revisar un PDF con el texto dudoso;
+  - los fragmentos de un documento, con sus páginas, para revisar un PDF con el texto dudoso;
+  - los documentos que tienen fragmentos sin página, porque se cargaron antes de que se guardara: se arregla con "Reprocesar todo";
   - los fragmentos de menos de 30 palabras, que con el corte por párrafos casi no tendría que haber;
   - si el Full-Text terminó de indexar, una búsqueda a mano y qué palabras busca el Full-Text a partir de una;
   - cuánto ocupa la base, y las últimas 20 preguntas con lo que tardó cada parte.
