@@ -28,13 +28,19 @@ SQL Server es la base que manda. El id de cada punto de Qdrant es el número de 
 
 **Preparar la base, una vez:** `scripts\crear-base.ps1` corre `sql\base.sql` en la base de `Conexiones:SqlTextos`. Si se recrea la base, los números de fragmento empiezan de nuevo y Qdrant queda con puntos de la base anterior: `GET /salud` lo avisa, y se arregla con "Reprocesar todo".
 
+**Actualizar una base ya creada:** el mismo script. `sql\base.sql` se puede correr de nuevo: lo que ya está no lo toca, y lo que falta lo agrega. A una base creada antes de que se guardara la página le agrega las columnas `Pagina` y `PaginaFin` de `rag.Fragmento`, sin tocar lo cargado.
+
+1. Frenar la API.
+2. Correr `scripts\crear-base.ps1`. `iniciar.cmd` no lo corre solo. El script lee el servidor y la base de `appsettings.json`, no de `conexiones.json`: para otro servidor se le pasan `-Servidor` y `-Base`, o se corre `sql\base.sql` desde SSMS.
+3. Arrancar, y en la página "Documentos" apretar "Reprocesar todo": los fragmentos que ya estaban quedaron con la página en `NULL`, y recién al rehacerse la tienen. Mientras dura, las preguntas no encuentran nada, porque ningún documento está `listo`.
+
 **Arrancar (`iniciar.cmd`):** corre `scripts\iniciar.ps1`. Lee `Conexiones:Qdrant`; si es de esta PC y no responde, arranca Qdrant en otra ventana con `scripts\iniciar-qdrant.ps1` (escuchando solo en `127.0.0.1`, con sus datos en `RAG-BASICO-datos\qdrant\storage` y sin telemetría). Si Qdrant está en otra máquina, no arranca nada. Después corre la API con `dotnet run`, que abre el navegador.
 
 **Arrancar la API:** carga `appsettings.json` y, si existe, `conexiones.json`, cuyas líneas pisan a las del primero. Registra los servicios y arranca siempre, aunque falte un servidor: lo que falte lo muestra la página. Cuando ya está escuchando, carga los dos modelos en Ollama en segundo plano, así la primera pregunta no espera la carga, y arranca el `Procesador`.
 
 **Revisar la salud (`GET /salud`):** un chequeo por pieza, y cada uno dice la dirección que probó y qué hacer.
 
-1. SQL Server: se conecta y cuenta los documentos por estado. Si no conecta, si falta la base o si faltan las tablas, es un `error`.
+1. SQL Server: se conecta y cuenta los documentos por estado. Si no conecta, si falta la base o si faltan las tablas, es un `error`. Si a `rag.Fragmento` le faltan las columnas de la página, también: el mensaje dice que se corra `sql\base.sql`.
 2. Full-Text: que esté instalado (si no, `error`) y sin cambios pendientes (si hay, `aviso`).
 3. Los dos modelos instalados en Ollama.
 4. La dimensión de los vectores: 1024.
@@ -64,8 +70,8 @@ Los chequeos corren todos a la vez, así un servidor caído no demora a los dem�
 3. Toma el turno (`Documentos.Turno`): mientras procesa un documento, nadie le borra los fragmentos ni los vectores.
 4. Le suma un intento (`Intentos`). Si ya llevaba 3 sin terminar, borra los fragmentos y los vectores que hubiera dejado, lo deja en `error` y sigue: así un PDF que cuelga o hace caer el proceso no frena a los demás. Después borra lo que hubiera quedado de un intento anterior: sus puntos de Qdrant y sus fragmentos de SQL.
 5. Consigue los bytes: de `rag.Documento.Contenido` si se arrastró, o de la base de origen con `Conexiones:ConsultaContenido` si se importó. Si no están, el documento queda en `error`.
-6. PdfPig saca el texto de cada página, con un tope de 5 minutos. Si el PDF está roto, tiene clave o no termina, queda en `error` con el motivo. Si tiene menos de 40 palabras por página en promedio, es un escaneo: queda `sin texto`.
-7. `Chunker.Partir` lo corta por párrafos, y los fragmentos se guardan en `rag.Fragmento`, en una transacción, cada uno empezando con `Documento: <nombre>`.
+6. PdfPig saca el texto de cada página, con un tope de 5 minutos, en una lista con un texto por página: una página sin texto también ocupa su lugar. Si el PDF está roto, tiene clave o no termina, queda en `error` con el motivo. Si tiene menos de 40 palabras por página en promedio, es un escaneo: queda `sin texto`.
+7. `Chunker.PartirPaginas` lo corta por párrafos y anota en qué página empieza y en cuál termina cada fragmento. Los fragmentos se guardan en `rag.Fragmento`, en una transacción, cada uno empezando con `Documento: <nombre>` y con su `Pagina`; `PaginaFin` se guarda solo si el fragmento termina en otra página.
 8. De a `Rag:LoteVectores` fragmentos, le pide los vectores a Ollama y los sube a Qdrant: el id del punto es el número de fragmento, y lleva el número de documento como dato extra.
 9. Marca el documento `listo`, solo si sigue siendo el mismo PDF: si mientras tanto lo reemplazaron o lo borraron, descarta lo armado. Recién `listo` aparece en las búsquedas. Si el texto salió dudoso (palabras pegadas, caracteres raros), queda anotado en `Detalle`.
 10. Si algo falla, depende de quién tuvo la culpa:
@@ -75,23 +81,27 @@ Los chequeos corren todos a la vez, así un servidor caído no demora a los dem�
 
 Como el estado está en la tabla, la API se puede apagar en cualquier momento: al volver sigue donde quedó.
 
-**Cortar por párrafos (`Chunker.Partir`):**
+**Cortar por párrafos (`Chunker.PartirPaginas`):**
 
-1. El texto se separa en párrafos por las líneas en blanco, que es como PdfPig marca un espacio grande entre dos renglones. Un párrafo de menos de 15 palabras, como un título, se pega al que le sigue.
+1. El texto de cada página se separa en párrafos por las líneas en blanco, que es como PdfPig marca un espacio grande entre dos renglones. Cada palabra queda anotada con el número de su página, contando desde 1 en el orden del PDF. Un párrafo de menos de 15 palabras, como un título, se pega al que le sigue, aunque el que le sigue esté en la página siguiente.
 2. Los párrafos se juntan enteros en un fragmento mientras entren en 300 palabras.
 3. Si un párrafo no entra y el fragmento ya tiene al menos 150 palabras, el fragmento se cierra antes del párrafo. Si tiene menos, el principio del párrafo lo completa. Un párrafo de más de 300 palabras se corta en ventanas.
 4. Cada fragmento empieza con las últimas 50 palabras del anterior. Si al final quedan menos de 50 palabras nuevas, se suman al último fragmento en lugar de abrir uno casi repetido.
+5. Cada fragmento sale con dos páginas: la de su primera palabra, contando las 50 repetidas del anterior, y la de la última. Si no cruza de página, las dos son la misma.
 
-**Mirar, borrar y rehacer:**
+El corte es el mismo que da unir las páginas con una línea en blanco y cortar el texto entero: anotar la página no mueve ningún corte. Por eso `Chunker.Version` sigue en `parrafos-1` y la huella de los documentos no cambia. `Chunker.Partir`, que recibe un texto suelto, es `PartirPaginas` con una sola página.
+
+**Mirar, abrir, borrar y rehacer:**
 
 - `GET /documentos` devuelve cuántos documentos hay en cada estado, cuántos fragmentos, cuántos documentos por minuto se procesaron en los últimos 10 minutos, lo que falta, una página de 50 documentos, de todos o de un estado, y, si la carga está frenada, el aviso con el motivo.
+- `GET /documentos/{id:int}/pdf` devuelve el PDF de un documento, en cualquier estado, para el visor del navegador. `Documentos.LeerPdfAsync` lo lee de SQL: de `rag.Documento.Contenido` si se arrastró, de la base de origen si se importó. Sale como `application/pdf` con tres encabezados: `Content-Disposition: inline` con el nombre del archivo, `X-Content-Type-Options: nosniff` y `Cache-Control: no-store`. Si no existe el documento, si no está el PDF o si lo guardado no es un PDF, 404. Si falla la base de origen, 502 o 503.
 - `DELETE /documentos/{id}` borra los puntos de Qdrant del documento y después su fila; los fragmentos se van en cascada.
 - `POST /documentos/reintentar` pasa los que quedaron en `error` a `pendiente`.
 - `POST /documentos/reprocesar` deja todos los documentos `pendiente`, borra todos los fragmentos (de a 20.000) y borra la colección de Qdrant: se rehace todo desde los PDF.
 
 La colección de Qdrant se crea sola antes de subir los primeros vectores, con vectores de 1024 números comparados por coseno y con dos umbrales bajos: `indexing_threshold` en 10 KB, para que Qdrant arme el índice HNSW enseguida, y `full_scan_threshold` en 10 KB, para que la búsqueda lo use. También se le crea un índice sobre el dato `documentoId`, para que borrar los puntos de un documento no recorra toda la colección.
 
-**Buscar (`GET /buscar?q=...&modo=...`):** `Buscador.ElegirModo` controla el modo; si no existe, la API devuelve un error 400. Solo se buscan los documentos `listo`.
+**Buscar (`GET /buscar?q=...&modo=...`):** `Buscador.ElegirModo` controla el modo; si no existe, la API devuelve un error 400. Solo se buscan los documentos `listo`. Cada fragmento vuelve con su número, el número y el nombre de su documento, `Pagina`, `PaginaFin` y el texto. Las dos consultas a SQL Server comparten la lista de columnas, la constante `Columnas`.
 
 - **Por palabras (`palabras`):** `FREETEXTTABLE` corta la pregunta en palabras, busca sus plurales y conjugaciones en el índice, puntúa cada fragmento y devuelve los 5 mejores.
 - **Por significado (`vectores`):** Ollama calcula el vector de la pregunta, con la instrucción en inglés de `Ollama:InstruccionPregunta` antes. Qdrant devuelve los números de los 5 fragmentos más cercanos, y SQL Server sus textos, en ese orden.
@@ -104,9 +114,9 @@ Se mezclan puestos y no puntajes porque el `RANK` del Full-Text y la distancia c
 1. `Validador.RevisarPregunta` controla la pregunta: vacía, más larga que `Rag:LargoMaximoPregunta`, con caracteres de control o sin letras ni números da un 400 con el motivo. Un modo que no existe, también.
 2. El `Redactor` busca los 5 mejores fragmentos con el modo pedido; sin modo, con la híbrida.
 3. Si no encontró ninguno, responde "No encontré esa información en los documentos." sin llamar al modelo.
-4. Si encontró, arma el mensaje: los fragmentos numerados `[1]` a `[5]` entre `<fragmentos>` y `</fragmentos>`, con los `<` y `>` del texto cambiados, y la pregunta al final.
+4. Si encontró, arma el mensaje: los fragmentos numerados `[1]` a `[5]` entre `<fragmentos>` y `</fragmentos>`, con los `<` y `>` del texto cambiados, y la pregunta al final. La página no va en el mensaje: al modelo no se le dice.
 5. Se lo manda al modelo de chat con las cinco reglas como mensaje de sistema.
-6. Si el modelo respondió la frase de "no encontré", la devuelve sin fuentes. Si no, devuelve el texto con citas y las fuentes en el mismo orden.
+6. Si el modelo respondió la frase de "no encontré", la devuelve sin fuentes. Si no, devuelve el texto con citas y las fuentes en el mismo orden. Cada fuente lleva el número con que se la cita, el número y el nombre del documento, la página donde empieza el fragmento, la página donde termina si cruza a otra, y el número del fragmento.
 7. Registra la consulta en `rag.Consulta`: la pregunta, el modo, los fragmentos, la respuesta y los tiempos. Si el registro falla, lo anota en el log y la respuesta sale igual.
 
 **Responder errores claros:**
@@ -117,7 +127,7 @@ Se mezclan puestos y no puntajes porque el `RANK` del Full-Text y la distancia c
 
 **Las páginas:**
 
-- `index.html`: manda la pregunta y el modo a `POST /preguntar`, y muestra la respuesta, las fuentes (las citadas con `[n]` en texto normal, las otras atenuadas) y lo que tardó cada parte.
+- `index.html`: manda la pregunta y el modo a `POST /preguntar`, y muestra la respuesta, las fuentes (las citadas con `[n]` en texto normal, las otras atenuadas) y lo que tardó cada parte. Cada fuente es un enlace a `/documentos/ID/pdf#page=N`, que abre el PDF en otra pestaña, en la página donde empieza el fragmento. Dice "archivo, página 3 (fragmento 41)"; si el fragmento cruza de página, "archivo, páginas 3 a 4 (fragmento 41)"; y si no tiene página guardada, "archivo (fragmento 41)", y el enlace abre el PDF desde el principio. La parte `#page=N` no llega a la API: la usa el visor.
 - `documentos.html`: la zona para soltar PDF, el botón de importar (prendido solo si `GET /info` dice que hay base de origen), los números del avance y la lista. Se actualiza sola: cada 5 segundos si hay pendientes, cada 30 si no.
 - `estado.js` dibuja la franja de estado de las dos, y `estilos.css` tiene lo común.
 
@@ -142,6 +152,8 @@ Base de `Conexiones:SqlTextos` (en casa, `RagBasico_F10`), esquema `rag`. Todo `
 | `rag.Fragmento` | `DocumentoId` | `INT` | A qué documento pertenece. Si se borra el documento, se borra el fragmento (cascada) |
 | `rag.Fragmento` | `Orden` | `INT` | Posición del fragmento dentro del documento, desde 1 |
 | `rag.Fragmento` | `Texto` | `NVARCHAR(MAX)` | El texto, que empieza con `Documento: <nombre>` |
+| `rag.Fragmento` | `Pagina` | `INT` | La página del PDF donde está la primera palabra del fragmento, contando desde 1 y contando las palabras repetidas del anterior. Es la página física, la que muestra el visor. `NULL` en un fragmento cargado antes de que se guardara la página |
+| `rag.Fragmento` | `PaginaFin` | `INT` | La página donde termina el fragmento, solo si termina en otra. Si no cruza de página, `NULL` |
 | `rag.Consulta` | `ConsultaId` | `INT IDENTITY` | Número de la consulta, clave primaria |
 | `rag.Consulta` | `Fecha` | `DATETIME2` | Cuándo se hizo. Por defecto, la fecha del servidor |
 | `rag.Consulta` | `Pregunta` | `NVARCHAR(2000)` | La pregunta, recortada a 2.000 caracteres |
@@ -155,6 +167,8 @@ Base de `Conexiones:SqlTextos` (en casa, `RagBasico_F10`), esquema `rag`. Todo `
 | `rag.Consulta` | `MsEscritura` | `INT` | Lo que tardó en escribir la respuesta |
 
 Índices: dos únicos con filtro en `rag.Documento` (`Archivo` entre los arrastrados, `OrigenId` entre los importados), uno por `Estado` para encontrar rápido el próximo pendiente, y uno por `DocumentoId` en `rag.Fragmento`.
+
+`sql\base.sql` crea `Pagina` y `PaginaFin` con la tabla en una base nueva, y en una base ya creada las agrega con un `ALTER TABLE` por columna, cada uno en su lote y solo si la columna falta (`COL_LENGTH`).
 
 Índice Full-Text: catálogo `ftRag`, sin distinguir acentos, sobre `rag.Fragmento.Texto`, en español (3082), con la lista de palabras vacías del sistema y actualización automática.
 
