@@ -343,7 +343,7 @@
   });
 
   document.getElementById('reprocesar').addEventListener('click', async function () {
-    if (!confirm('Reprocesar todo borra los fragmentos y los vectores, y vuelve a procesar todos los documentos desde los PDF. Con muchos documentos tarda horas. ¿Seguir?')) { return; }
+    if (!confirm('Reprocesar todo borra los fragmentos y los vectores, y vuelve a procesar todos los documentos desde los PDF. Con muchos documentos tarda horas, y hasta que termina las preguntas no encuentran los que faltan. ¿Seguir?')) { return; }
     const datos = await pedir('/documentos/reprocesar', { method: 'POST' });
     if (datos !== null) {
       informe.textContent = datos.cuantos + ' documentos quedaron pendientes para procesar de nuevo.';

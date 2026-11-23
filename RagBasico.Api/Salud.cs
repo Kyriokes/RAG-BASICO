@@ -72,7 +72,7 @@ public sealed class Salud
         }
     }
 
-    /// <summary>SQL Server: se conecta a la base y cuenta los documentos por estado y los fragmentos.</summary>
+    /// <summary>SQL Server: se conecta a la base, controla que la tabla de fragmentos tenga las columnas de la página y cuenta los documentos por estado y los fragmentos.</summary>
     private async Task<Chequeo> RevisarSqlAsync(CancellationToken ct)
     {
         const string nombre = "SQL Server";
@@ -81,6 +81,17 @@ public sealed class Salud
         {
             using (SqlConnection conexion = new SqlConnection(_conexion))
             {
+                // Una base creada antes de que se guardara la página no tiene las dos columnas: buscar y cargar fallarían.
+                // COL_LENGTH devuelve NULL si la columna no existe. Si lo que no existe es la tabla, este control da 0
+                // y el aviso lo da la consulta que sigue, con el error 208.
+                int faltanColumnas = await conexion.ExecuteScalarAsync<int>(new CommandDefinition(
+                    "SELECT CASE WHEN OBJECT_ID(N'rag.Fragmento') IS NOT NULL AND " +
+                    "(COL_LENGTH(N'rag.Fragmento', N'Pagina') IS NULL OR COL_LENGTH(N'rag.Fragmento', N'PaginaFin') IS NULL) THEN 1 ELSE 0 END;",
+                    cancellationToken: ct));
+                if (faltanColumnas == 1)
+                {
+                    return new Chequeo(nombre, "error", "En " + donde + " a la tabla rag.Fragmento le faltan las columnas de la página. Corré sql\\base.sql en ese servidor (en casa, scripts\\crear-base.ps1): agrega las columnas sin tocar lo cargado.");
+                }
                 Conteo conteo = await conexion.QuerySingleAsync<Conteo>(new CommandDefinition(
                     "SELECT " +
                     "(SELECT COUNT(*) FROM rag.Documento WHERE Estado = 'listo') AS Listos, " +

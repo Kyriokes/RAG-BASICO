@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Net.Http.Headers;
 using RagBasico.Api;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -150,6 +151,36 @@ app.MapGet("/documentos", async (string? estado, int? pagina, Documentos documen
     ResumenDocumentos resumen = await documentos.ResumirAsync(filtro, pagina ?? 1, ct);
     // Si la carga está frenada porque un servidor no responde, la página lo muestra.
     return Results.Ok(resumen with { Aviso = Procesador.Aviso });
+});
+
+// Abre el PDF de un documento en el visor del navegador. Los PDF no están en una carpeta: se leen de SQL,
+// de la base del RAG si se arrastró o de la base de origen si se importó. Las fuentes de una respuesta enlazan acá,
+// con #page=N al final de la dirección; esa parte no llega a la API: la usa el visor para ir a la página.
+app.MapGet("/documentos/{id:int}/pdf", async (int id, HttpResponse respuesta, Documentos documentos, CancellationToken ct) =>
+{
+    PdfGuardado? pdf = await documentos.LeerPdfAsync(id, ct);
+    if (pdf == null)
+    {
+        return Results.Problem(title: "No existe ese documento", detail: "No hay un documento con el número " + id + ".", statusCode: 404);
+    }
+    if (pdf.Contenido == null)
+    {
+        return Results.Problem(title: "No está el PDF de ese documento", detail: "El documento " + id + " (" + pdf.Archivo + ") no tiene el PDF guardado, o ya no está en la base de origen.", statusCode: 404);
+    }
+    if (!Documentos.EsPdf(pdf.Contenido))
+    {
+        return Results.Problem(title: "No está el PDF de ese documento", detail: "Lo que está guardado para el documento " + id + " (" + pdf.Archivo + ") no es un PDF.", statusCode: 404);
+    }
+    // "inline" le dice al navegador que lo muestre en su visor en lugar de descargarlo. SetHttpFileName escribe el nombre
+    // del archivo de forma segura para un encabezado, también con tildes, eñes o comillas.
+    ContentDispositionHeaderValue disposicion = new ContentDispositionHeaderValue("inline");
+    disposicion.SetHttpFileName(pdf.Archivo);
+    respuesta.Headers.ContentDisposition = disposicion.ToString();
+    // nosniff: el navegador lo trata como PDF y como nada más, diga lo que diga el contenido.
+    respuesta.Headers.XContentTypeOptions = "nosniff";
+    // no-store: el PDF de un documento se puede reemplazar, así que el navegador no guarda una copia.
+    respuesta.Headers.CacheControl = "no-store";
+    return Results.File(pdf.Contenido, "application/pdf");
 });
 
 app.MapDelete("/documentos/{id:int}", async (int id, Documentos documentos, CancellationToken ct) =>

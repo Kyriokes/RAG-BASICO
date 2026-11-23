@@ -12,11 +12,17 @@ public sealed record RespuestaModelo(
     int TokensPregunta,
     int TokensRespuesta);
 
-/// <summary>Un fragmento encontrado por el buscador: su número, el archivo de donde salió y su texto.</summary>
-public sealed record Fragmento(int FragmentoId, string Archivo, string Texto);
+/// <summary>Un fragmento recién cortado por el Chunker: su texto, la página del PDF donde está su primera palabra y la página donde está la última. Si no cruza de página, las dos son la misma.</summary>
+public sealed record Parte(string Texto, int Pagina, int PaginaFin);
 
-/// <summary>Una fuente de la respuesta: el número con que la cita el modelo, el archivo y el fragmento.</summary>
-public sealed record Fuente(int Numero, string Archivo, int FragmentoId);
+/// <summary>Un fragmento encontrado por el buscador: su número, el número y el archivo del documento de donde salió, la página del PDF donde empieza, la página donde termina si cruza a otra (si no cruza, null) y su texto. Pagina es null en un fragmento cargado antes de que se guardara la página.</summary>
+public sealed record Fragmento(int FragmentoId, int DocumentoId, string Archivo, int? Pagina, int? PaginaFin, string Texto);
+
+/// <summary>Una fuente de la respuesta: el número con que la cita el modelo, el número y el archivo del documento, la página donde empieza el fragmento, la página donde termina si cruza a otra, y el número del fragmento.</summary>
+public sealed record Fuente(int Numero, int DocumentoId, string Archivo, int? Pagina, int? PaginaFin, int FragmentoId);
+
+/// <summary>El PDF de un documento, para abrirlo: el nombre del archivo y sus bytes. Contenido es null si el documento no tiene el PDF guardado o ya no está en la base de origen.</summary>
+public sealed record PdfGuardado(string Archivo, byte[]? Contenido);
 
 /// <summary>Lo que devuelve POST /preguntar: la respuesta, sus fuentes y lo que tardó cada parte.</summary>
 public sealed record RespuestaRag(
