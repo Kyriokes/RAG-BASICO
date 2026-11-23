@@ -10,6 +10,8 @@
   #fuentes { margin: 0; padding-left: 22px; }
   #fuentes li { margin: 2px 0; overflow-wrap: anywhere; }
   #fuentes li.no-citada { color: var(--suave); }
+  #fuentes a { color: var(--acento); }
+  #fuentes li.no-citada a { color: var(--suave); }
   .tiempos { color: var(--suave); font-size: 0.875rem; margin: 18px 0 0; }
 </style>
 </head>
@@ -120,7 +122,26 @@
     for (const fuente of datos.fuentes) {
       const item = document.createElement('li');
       item.value = fuente.numero;
-      item.textContent = fuente.archivo + ' (fragmento ' + fuente.fragmentoId + ')';
+      // Cada fuente es un enlace que abre el PDF en otra pestaña, con el visor del navegador.
+      // Con #page=N el visor va a la página donde empieza el fragmento. Un documento cargado antes
+      // de que se guardara la página no la tiene: el enlace abre el PDF desde el principio.
+      const enlace = document.createElement('a');
+      let direccion = '/documentos/' + fuente.documentoId + '/pdf';
+      let texto = fuente.archivo;
+      if (fuente.pagina) {
+        direccion += '#page=' + fuente.pagina;
+        if (fuente.paginaFin && fuente.paginaFin > fuente.pagina) {
+          texto += ', páginas ' + fuente.pagina + ' a ' + fuente.paginaFin;
+        } else {
+          texto += ', página ' + fuente.pagina;
+        }
+      }
+      enlace.href = direccion;
+      enlace.target = '_blank';
+      enlace.rel = 'noopener';
+      enlace.textContent = texto;
+      item.appendChild(enlace);
+      item.appendChild(document.createTextNode(' (fragmento ' + fuente.fragmentoId + ')'));
       if (!citadas.has(fuente.numero)) {
         item.className = 'no-citada';
         item.title = 'Se le pasó al modelo, pero no la citó';

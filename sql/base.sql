@@ -60,8 +60,19 @@ CREATE TABLE rag.Fragmento (
     DocumentoId  INT NOT NULL CONSTRAINT FK_rag_Fragmento_Documento
                      REFERENCES rag.Documento (DocumentoId) ON DELETE CASCADE,
     Orden        INT NOT NULL,
-    Texto        NVARCHAR(MAX) NOT NULL
+    Texto        NVARCHAR(MAX) NOT NULL,
+    Pagina       INT NULL,
+    PaginaFin    INT NULL
 );
+GO
+-- En qué página del PDF empieza el fragmento, y en cuál termina si cruza a otra: si no cruza, PaginaFin queda en NULL.
+-- Estos dos pasos agregan las columnas a una base creada antes de que existieran. Los fragmentos que ya estaban
+-- quedan con la página en NULL hasta apretar "Reprocesar todo" en la página de documentos.
+IF COL_LENGTH(N'rag.Fragmento', N'Pagina') IS NULL
+    ALTER TABLE rag.Fragmento ADD Pagina INT NULL;
+GO
+IF COL_LENGTH(N'rag.Fragmento', N'PaginaFin') IS NULL
+    ALTER TABLE rag.Fragmento ADD PaginaFin INT NULL;
 GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_rag_Fragmento_Documento')
     CREATE INDEX IX_rag_Fragmento_Documento ON rag.Fragmento (DocumentoId);

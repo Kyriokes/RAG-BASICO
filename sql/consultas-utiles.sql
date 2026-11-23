@@ -28,11 +28,19 @@ ORDER BY DocumentoId;
 SELECT DocumentoId, Archivo, Detalle FROM rag.Documento WHERE Estado = 'listo' AND Detalle IS NOT NULL;
 
 -- Los fragmentos de un documento, en orden: para revisar un PDF con el texto dudoso.
-SELECT f.Orden, LEN(f.Texto) AS Caracteres, f.Texto
+SELECT f.Orden, f.Pagina, f.PaginaFin, LEN(f.Texto) AS Caracteres, f.Texto
 FROM rag.Fragmento AS f
 JOIN rag.Documento AS d ON d.DocumentoId = f.DocumentoId
 WHERE d.Archivo = N'nombre-del-archivo.pdf'
 ORDER BY f.Orden;
+
+-- Los documentos con fragmentos sin página: se cargaron antes de que se guardara. Se arregla con "Reprocesar todo".
+SELECT d.DocumentoId, d.Archivo, COUNT(*) AS FragmentosSinPagina
+FROM rag.Fragmento AS f
+JOIN rag.Documento AS d ON d.DocumentoId = f.DocumentoId
+WHERE f.Pagina IS NULL
+GROUP BY d.DocumentoId, d.Archivo
+ORDER BY d.DocumentoId;
 
 -- Fragmentos de menos de 30 palabras (contando espacios): con el corte por párrafos casi no tendría que haber.
 SELECT TOP (20) d.Archivo, f.Orden, f.Texto
