@@ -58,5 +58,8 @@ public sealed record Pendiente(int DocumentoId, string Archivo, string? OrigenId
 /// <summary>Un documento en la lista de la página: su estado, el motivo si falló y cuántos fragmentos tiene.</summary>
 public sealed record DocumentoFila(int DocumentoId, string Archivo, string? OrigenId, string Estado, string? Detalle, int Fragmentos, DateTime FechaCarga);
 
-/// <summary>Lo que devuelve GET /documentos: cuántos documentos hay en cada estado, cuántos fragmentos, la velocidad de carga, lo que falta, una página de la lista y, si la carga está frenada, el aviso que dice por qué.</summary>
-public sealed record ResumenDocumentos(int Listos, int Pendientes, int SinTexto, int ConError, int Fragmentos, double DocumentosPorMinuto, string TiempoQueFalta, List<DocumentoFila> Pagina, string Aviso);
+/// <summary>Por dónde va el documento que se está procesando: su archivo, el paso en que está, cuántos fragmentos ya tienen su vector y cuántos fragmentos son. Total es 0 mientras todavía no se cortó el texto.</summary>
+public sealed record AvanceDeCarga(string Archivo, string Paso, int Hechos, int Total);
+
+/// <summary>Lo que devuelve GET /documentos: cuántos documentos hay en cada estado, cuántos fragmentos, la velocidad de carga, lo que falta, una página de la lista, el aviso que dice por qué está frenada la carga, si lo está, y por dónde va el documento que se está procesando, o null si no hay ninguno.</summary>
+public sealed record ResumenDocumentos(int Listos, int Pendientes, int SinTexto, int ConError, int Fragmentos, double DocumentosPorMinuto, string TiempoQueFalta, List<DocumentoFila> Pagina, string Aviso, AvanceDeCarga? EnCurso);

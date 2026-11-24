@@ -383,7 +383,7 @@ public sealed class Documentos
 
             double porMinuto = cuenta.Recientes / 10.0;
             return new ResumenDocumentos(cuenta.Listos, cuenta.Pendientes, cuenta.SinTexto, cuenta.ConError, cuenta.Fragmentos,
-                porMinuto, EstimarFalta(cuenta.Pendientes, porMinuto), filas.ToList(), "");
+                porMinuto, EstimarFalta(cuenta.Pendientes, porMinuto), filas.ToList(), "", null);
         }
     }
 

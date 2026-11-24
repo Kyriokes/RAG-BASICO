@@ -150,7 +150,8 @@ app.MapGet("/documentos", async (string? estado, int? pagina, Documentos documen
     }
     ResumenDocumentos resumen = await documentos.ResumirAsync(filtro, pagina ?? 1, ct);
     // Si la carga está frenada porque un servidor no responde, la página lo muestra.
-    return Results.Ok(resumen with { Aviso = Procesador.Aviso });
+    // Y si se está procesando un documento, muestra por dónde va: con un PDF enorme, así se ve que avanza.
+    return Results.Ok(resumen with { Aviso = Procesador.Aviso, EnCurso = Cargador.EnCurso });
 });
 
 // Abre el PDF de un documento en el visor del navegador. Los PDF no están en una carpeta: se leen de SQL,

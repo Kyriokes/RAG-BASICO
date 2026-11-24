@@ -15,6 +15,16 @@ public sealed class Cargador
     // Cuánto se espera a que PdfPig saque el texto de un PDF. Uno mal armado puede dejarlo dando vueltas sin terminar.
     private static readonly TimeSpan EsperaDeLectura = TimeSpan.FromMinutes(5);
 
+    // Por dónde va el documento que se está procesando, o null si no hay ninguno. Lo lee GET /documentos para mostrarlo en la página.
+    // Vive en memoria y no en la base: si se apaga la API, el documento se procesa de nuevo desde el principio.
+    private static volatile AvanceDeCarga? _enCurso;
+
+    /// <summary>Por dónde va el documento que se está procesando, o null si no se está procesando ninguno.</summary>
+    public static AvanceDeCarga? EnCurso
+    {
+        get { return _enCurso; }
+    }
+
     private readonly Documentos _documentos;
     private readonly Ollama _ollama;
     private readonly Qdrant _qdrant;
@@ -53,6 +63,8 @@ public sealed class Cargador
         }
         finally
         {
+            // Termine bien o mal, ya no se está procesando ese documento.
+            _enCurso = null;
             Documentos.Turno.Release();
         }
         return true;
@@ -112,6 +124,8 @@ public sealed class Cargador
             await BorrarFragmentosAsync(pendiente.DocumentoId, ct);
 
             // 2. Los bytes del PDF: de la base del RAG si se arrastró, de la base de origen si se importó.
+            //    Con la base de origen lenta puede tardar: desde acá la página ya muestra qué documento se está procesando.
+            _enCurso = new AvanceDeCarga(pendiente.Archivo, "trayendo el PDF", 0, 0);
             byte[]? contenido = await _documentos.LeerContenidoAsync(pendiente, ct);
             if (contenido == null)
             {
@@ -126,6 +140,8 @@ public sealed class Cargador
             }
 
             // 3. El texto, una página por elemento. Un PDF roto o con clave falla acá.
+            //    PdfPig no avisa por qué página va: este paso se muestra sin cantidades.
+            _enCurso = new AvanceDeCarga(pendiente.Archivo, "leyendo el PDF", 0, 0);
             List<string> paginas;
             try
             {
@@ -153,10 +169,13 @@ public sealed class Cargador
             }
 
             // 4. Los fragmentos, guardados en SQL con la página donde empiezan. Su número es el id del vector en Qdrant.
+            _enCurso = new AvanceDeCarga(pendiente.Archivo, "cortando el texto", 0, 0);
             List<Parte> partes = Chunker.PartirPaginas(paginas, _palabras, _solapamiento);
             List<FragmentoNuevo> fragmentos = await GuardarFragmentosAsync(pendiente, partes, ct);
 
-            // 5. Los vectores, de a lotes: se piden a Ollama y se suben a Qdrant.
+            // 5. Los vectores, de a lotes: se piden a Ollama y se suben a Qdrant. Es el paso largo:
+            //    después de cada lote se anota cuántos fragmentos van, para que la página muestre la barra.
+            _enCurso = new AvanceDeCarga(pendiente.Archivo, "calculando los vectores", 0, fragmentos.Count);
             await _qdrant.AsegurarColeccionAsync(ct);
             for (int i = 0; i < fragmentos.Count; i += _lote)
             {
@@ -168,6 +187,7 @@ public sealed class Cargador
                     puntos.Add(new PuntoQdrant(lote[j].FragmentoId, vectores[j], pendiente.DocumentoId));
                 }
                 await _qdrant.SubirAsync(puntos, ct);
+                _enCurso = new AvanceDeCarga(pendiente.Archivo, "calculando los vectores", i + lote.Count, fragmentos.Count);
             }
 
             // 6. Listo: recién ahora aparece en las búsquedas. Si el texto salió dudoso, queda anotado.

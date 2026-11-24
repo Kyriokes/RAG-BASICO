@@ -23,6 +23,9 @@
   #numeros dt { color: var(--suave); font-size: 0.8rem; }
   #numeros dd { margin: 0; font-size: 1.4rem; font-weight: 600; }
   .nota.frenada { color: var(--error); overflow-wrap: anywhere; }
+  .barra { margin-top: 12px; }
+  .barra .nota { margin: 0 0 4px; overflow-wrap: anywhere; }
+  progress { width: 100%; height: 10px; accent-color: var(--acento); }
   .tabla { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--borde); vertical-align: top; }
@@ -57,6 +60,10 @@
       <strong>Soltá los PDF acá</strong>, o hacé clic para elegirlos.
     </div>
     <input type="file" id="elegir" accept="application/pdf,.pdf" multiple hidden>
+    <div id="barraSubida" class="barra" hidden>
+      <p id="textoSubida" class="nota"></p>
+      <progress id="progresoSubida" max="100" value="0" aria-labelledby="textoSubida"></progress>
+    </div>
     <p id="informe" hidden></p>
     <div class="acciones">
       <button type="button" id="importar" class="secundario" disabled>Importar de la base de origen</button>
@@ -72,6 +79,14 @@
       <div><dt>Con error</dt><dd id="nError">-</dd></div>
       <div><dt>Fragmentos</dt><dd id="nFragmentos">-</dd></div>
     </dl>
+    <div id="barraTotal" class="barra" hidden>
+      <p id="textoTotal" class="nota"></p>
+      <progress id="progresoTotal" max="1" value="0" aria-labelledby="textoTotal"></progress>
+    </div>
+    <div id="barraEnCurso" class="barra" hidden>
+      <p id="textoEnCurso" class="nota"></p>
+      <progress id="progresoEnCurso" max="1" value="0" aria-labelledby="textoEnCurso"></progress>
+    </div>
     <p id="avance" class="nota"></p>
     <div class="acciones">
       <button type="button" id="reintentar" class="secundario">Reintentar los que fallaron</button>
@@ -119,6 +134,15 @@
   const filas = document.getElementById('filas');
   const vacio = document.getElementById('vacio');
   const avance = document.getElementById('avance');
+  const barraSubida = document.getElementById('barraSubida');
+  const textoSubida = document.getElementById('textoSubida');
+  const progresoSubida = document.getElementById('progresoSubida');
+  const barraTotal = document.getElementById('barraTotal');
+  const textoTotal = document.getElementById('textoTotal');
+  const progresoTotal = document.getElementById('progresoTotal');
+  const barraEnCurso = document.getElementById('barraEnCurso');
+  const textoEnCurso = document.getElementById('textoEnCurso');
+  const progresoEnCurso = document.getElementById('progresoEnCurso');
   const textoPagina = document.getElementById('pagina');
   const anterior = document.getElementById('anterior');
   const siguiente = document.getElementById('siguiente');
@@ -181,12 +205,50 @@
     for (const archivo of archivos) {
       formulario.append('archivos', archivo, archivo.name);
     }
-    informe.textContent = 'Subiendo ' + archivos.length + ' archivos...';
-    informe.hidden = false;
-    const datos = await pedir('/documentos', { method: 'POST', body: formulario });
-    if (datos === null) { informe.hidden = true; return; }
-    mostrarInforme(datos);
+    error.hidden = true;
+    informe.hidden = true;
+    textoSubida.textContent = 'Subiendo ' + archivos.length + ' archivos...';
+    progresoSubida.value = 0;
+    barraSubida.hidden = false;
+    const respuesta = await enviarConAvance('/documentos', formulario, function (enviado, total) {
+      const porcentaje = Math.floor(enviado * 100 / total);
+      progresoSubida.value = porcentaje;
+      // Cuando ya se envió todo, la API todavía tiene que guardar los PDF en la base: es corto, pero no es instantáneo.
+      textoSubida.textContent = porcentaje < 100
+        ? 'Subiendo ' + archivos.length + ' archivos: ' + porcentaje + ' %'
+        : 'Guardando ' + archivos.length + ' archivos en la base...';
+    });
+    barraSubida.hidden = true;
+    if (respuesta === null) {
+      mostrarError('No se pudo conectar con la API.');
+      return;
+    }
+    let datos = null;
+    try { datos = JSON.parse(respuesta.cuerpo); } catch (e) { datos = null; }
+    if (respuesta.estado < 200 || respuesta.estado > 299) {
+      // Los errores vienen como ProblemDetails: el título dice qué pasó y el detalle, qué hacer.
+      const motivo = datos && [datos.title, datos.detail].filter(Boolean).join(': ');
+      mostrarError(motivo || ('La API respondió ' + respuesta.estado + '.'));
+      return;
+    }
+    mostrarInforme(datos || {});
     actualizar(true);
+  }
+
+  // Manda un formulario y va avisando cuánto lleva enviado. Devuelve el código y el cuerpo de la respuesta,
+  // o null si no se pudo conectar. Se usa XMLHttpRequest y no fetch porque fetch no informa el avance de lo que envía.
+  function enviarConAvance(ruta, formulario, alAvanzar) {
+    return new Promise(function (resolver) {
+      const pedido = new XMLHttpRequest();
+      pedido.open('POST', ruta);
+      pedido.upload.addEventListener('progress', function (evento) {
+        if (evento.lengthComputable && evento.total > 0) { alAvanzar(evento.loaded, evento.total); }
+      });
+      pedido.addEventListener('load', function () { resolver({ estado: pedido.status, cuerpo: pedido.responseText }); });
+      pedido.addEventListener('error', function () { resolver(null); });
+      pedido.addEventListener('abort', function () { resolver(null); });
+      pedido.send(formulario);
+    });
   }
 
   function mostrarInforme(datos) {
@@ -225,7 +287,8 @@
     actualizar(true);
   });
 
-  // --- El avance y la lista. Se actualiza solo: cada 5 segundos si hay pendientes, cada 30 si no.
+  // --- El avance y la lista. Se actualiza solo: cada 2 segundos si se está procesando un documento,
+  // cada 5 si hay pendientes y cada 30 si no.
   // Con callado en true pide sin tocar el error que esté a la vista: así llaman el reloj y las acciones que ya
   // terminaron. Sin callado, que es como llaman el filtro y los botones de página, muestra su propio error.
   // Devuelve true si pudo traer la lista.
@@ -238,6 +301,7 @@
     if (datos !== null) {
       dibujar(datos);
       if (datos.pendientes > 0) { espera = 5000; }
+      if (datos.enCurso) { espera = 2000; }
     }
     // Si mientras se esperaba la respuesta se pidió otra actualización, el reloj es el de esa: no se arman dos.
     clearTimeout(reloj);
@@ -251,6 +315,8 @@
     document.getElementById('nSinTexto').textContent = datos.sinTexto;
     document.getElementById('nError').textContent = datos.conError;
     document.getElementById('nFragmentos').textContent = datos.fragmentos;
+
+    dibujarBarras(datos);
 
     if (datos.aviso) {
       // La carga está frenada porque un servidor no responde: la API dice cuál y que reintenta sola.
@@ -273,6 +339,32 @@
     textoPagina.textContent = 'Página ' + pagina;
     anterior.disabled = pagina <= 1;
     siguiente.disabled = datos.pagina.length < POR_PAGINA;
+  }
+
+  // Las dos barras del procesado: cuántos documentos van del total, y por dónde va el que se está procesando.
+  function dibujarBarras(datos) {
+    const procesados = datos.listos + datos.sinTexto + datos.conError;
+    const total = procesados + datos.pendientes;
+    barraTotal.hidden = datos.pendientes === 0;
+    if (datos.pendientes > 0) {
+      textoTotal.textContent = 'Documentos: ' + procesados.toLocaleString('es-AR') + ' de ' + total.toLocaleString('es-AR') + ' procesados.';
+      progresoTotal.max = total;
+      progresoTotal.value = procesados;
+    }
+
+    const enCurso = datos.enCurso;
+    barraEnCurso.hidden = !enCurso;
+    if (!enCurso) { return; }
+    if (enCurso.total > 0) {
+      textoEnCurso.textContent = 'Procesando ' + enCurso.archivo + ': ' + enCurso.hechos.toLocaleString('es-AR') + ' de '
+        + enCurso.total.toLocaleString('es-AR') + ' fragmentos (' + enCurso.paso + ').';
+      progresoEnCurso.max = enCurso.total;
+      progresoEnCurso.value = enCurso.hechos;
+    } else {
+      // Todavía no se sabe cuántos fragmentos son: sin "value", el navegador dibuja una barra que se mueve sin porcentaje.
+      textoEnCurso.textContent = 'Procesando ' + enCurso.archivo + ': ' + enCurso.paso + '...';
+      progresoEnCurso.removeAttribute('value');
+    }
   }
 
   function armarFila(documento) {
