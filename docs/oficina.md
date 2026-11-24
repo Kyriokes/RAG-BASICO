@@ -293,6 +293,7 @@ Lo que ocupa: en Qdrant, cada fragmento son unos 4 KB de memoria, así que un mi
 | SQL Server en rojo: `Login failed for user` | El usuario o la clave están mal, o el servidor no está en modo mixto (punto 6 del SQL Server) |
 | SQL Server en rojo: `No se pudo abrir la base` | La base no existe o el usuario no tiene permiso: puntos 7 y 8 del SQL Server |
 | SQL Server en rojo: `faltan las tablas del RAG` | La base existe pero no se corrió `sql\base.sql` en ella, o se corrió en otra |
+| SQL Server en rojo: a la tabla `rag.Fragmento` le faltan las columnas de la página | La base se creó con un `sql\base.sql` anterior. Frenar la API y correr de nuevo `sql\base.sql` en SSMS, como en el paso de crear la base: agrega las columnas sin tocar lo cargado. Lo tiene que correr quien administra el servidor, porque el usuario de la API solo lee y escribe y no puede cambiar tablas. Después, en "Documentos", "Reprocesar todo", para que los fragmentos ya cargados tengan página |
 | Full-Text en rojo | Ese SQL Server se instaló sin Full-Text: punto 1 del SQL Server |
 | Al cargar un documento, un error de permisos (`permission was denied`) | Al usuario le falta `db_datawriter`: punto 8 del SQL Server |
 | Modelos de Ollama en rojo: `Ollama no responde en http://SERVIDOR-IA:11434` | Ollama está cerrado, o escucha solo en su PC: falta `OLLAMA_HOST` y reiniciarlo (punto 4), o falta abrir el firewall |
