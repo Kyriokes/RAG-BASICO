@@ -188,7 +188,7 @@ RAG-BASICO\
 ## RagBasico.Api\Cargador.cs
 
 - **Responsabilidad:** procesar un documento pendiente de punta a punta: sacar el texto del PDF, cortarlo, guardar los fragmentos, calcular sus vectores y subirlos a Qdrant.
-- **Contiene:** la clase `Cargador`; tres valores privados: `PalabrasPorPaginaMinimas` (40), el promedio de palabras por página por debajo del cual un PDF se toma como escaneado, `EsperaDeLectura` (5 minutos), lo que se espera a que PdfPig saque el texto de un PDF, y `NumeroDeTiempoVencido` (-2), el número con que SQL Server avisa que se venció el tiempo de una consulta; y su record privado `FragmentoNuevo`, un fragmento recién guardado con su número y su texto.
+- **Contiene:** la clase `Cargador`; tres valores privados: `PalabrasPorPaginaMinimas` (40), el promedio de palabras por página por debajo del cual un PDF se toma como escaneado, `EsperaDeLectura` (5 minutos), lo que se espera a que PdfPig saque el texto de un PDF, y `NumeroDeTiempoVencido` (-2), el número con que SQL Server avisa que se venció el tiempo de una consulta; su record privado `FragmentoNuevo`, un fragmento recién guardado con su número y su texto; y la propiedad estática `EnCurso`, de solo lectura, que dice por dónde va el documento que se está procesando (un `AvanceDeCarga`), o `null` si no hay ninguno. Es estática por lo mismo que `Procesador.Aviso`: la lee el endpoint `GET /documentos`, que no recibe al `Cargador` que está procesando. Atrás tiene un campo `volatile`, porque lo escribe el trabajo en segundo plano y lo lee un pedido, en otro hilo. Vive en memoria y no en la base: si se apaga la API, se pierde, y el documento se procesa de nuevo desde el principio.
 - **Desde:** fase-9-local. Junta lo que hasta la fase 8 hacían el `Indexador`, el `Vectorizador` y el `Sincronizador`.
 - **Cambió en:** nada todavía.
 
@@ -202,10 +202,10 @@ RAG-BASICO\
 
 ### Cargador.ProcesarSiguienteAsync(ct)
 
-- **Qué hace:** le pide el próximo pendiente a Documentos.SiguientePendienteAsync, toma el turno (`Documentos.Turno`) y lo procesa con Cargador.ProcesarAsync. Mientras tiene el turno, nadie más toca los fragmentos ni los vectores: ni borrar ni reprocesar.
+- **Qué hace:** le pide el próximo pendiente a Documentos.SiguientePendienteAsync, toma el turno (`Documentos.Turno`) y lo procesa con Cargador.ProcesarAsync. Mientras tiene el turno, nadie más toca los fragmentos ni los vectores: ni borrar ni reprocesar. Cuando el documento termina, bien o mal, deja `EnCurso` en `null`.
 - **Recibe:** el token de cancelación, que se dispara cuando se apaga la API.
 - **Devuelve:** `false` si no había ningún pendiente; `true` si procesó uno, haya quedado `listo`, `sin texto` o `error`. Si el error es de un servidor, o puede ser pasajero, lanza el error y el documento queda pendiente.
-- **Efectos:** los de Cargador.ProcesarAsync.
+- **Efectos:** los de Cargador.ProcesarAsync; deja `EnCurso` en `null`.
 - **La llaman:** Procesador.ExecuteAsync.
 - **Desde:** fase-9-local.
 - **Cambió en:** nada todavía.
@@ -248,9 +248,10 @@ RAG-BASICO\
     - si el error es de un servidor (Cargador.EsDeUnServidor), le devuelve el intento, el documento queda pendiente y el error sale, para que el `Procesador` espere y reintente;
     - si puede ser pasajero (Cargador.EsPasajero) y todavía no es el tercer intento, el documento queda pendiente con el intento contado y el error sale;
     - si no, borra de Qdrant los vectores que llegó a subir (Cargador.BorrarVectoresSinFallarAsync), lo anota en el log con el error completo y deja el documento en `error` con el mensaje.
+  - Mientras tanto va anotando en `EnCurso` por dónde va, para que la página lo muestre. En el paso 3, "trayendo el PDF", en el 4, "leyendo el PDF", y en el 5, "cortando el texto", con las dos cantidades en 0: todavía no se sabe cuántos fragmentos son, y PdfPig no avisa por qué página va. En el paso 6, "calculando los vectores", con cuántos fragmentos ya tienen su vector y cuántos son: lo actualiza después de cada lote. En los pasos 1 y 2, que son cortos, todavía no anota nada.
 - **Recibe:** el documento pendiente y el token de cancelación.
 - **Devuelve:** nada.
-- **Efectos:** lee el PDF de la base del RAG o de la base de origen; borra y escribe en `rag.Fragmento`; cambia el estado y los intentos en `rag.Documento`; pedidos a Ollama; borra y sube puntos en Qdrant.
+- **Efectos:** lee el PDF de la base del RAG o de la base de origen; borra y escribe en `rag.Fragmento`; cambia el estado y los intentos en `rag.Documento`; pedidos a Ollama; borra y sube puntos en Qdrant; cambia `EnCurso`.
 - **La llaman:** Cargador.ProcesarSiguienteAsync.
 - **Desde:** fase-9-local.
 - **Cambió en:** nada todavía.
@@ -614,7 +615,7 @@ RAG-BASICO\
 
 - **Qué hace:** cuenta los documentos por estado y los fragmentos; calcula la velocidad, que son los documentos procesados en los últimos 10 minutos dividido 10; estima lo que falta con Documentos.EstimarFalta; y trae una página de 50 documentos, el más nuevo primero, de todos o de un solo estado.
 - **Recibe:** el estado para filtrar, o `null` para todos; el número de página, desde 1; y el token de cancelación.
-- **Devuelve:** un `ResumenDocumentos`, con el aviso vacío: lo completa el endpoint.
+- **Devuelve:** un `ResumenDocumentos`, con el aviso vacío y `EnCurso` en `null`: los dos los completa el endpoint, porque están en memoria y no en la base.
 - **Efectos:** lee `rag.Documento` y `rag.Fragmento`.
 - **La llaman:** el endpoint `GET /documentos`.
 - **Desde:** fase-9-local.
@@ -643,7 +644,7 @@ RAG-BASICO\
 ### Documentos.ReprocesarTodoAsync(ct)
 
 - **Qué hace:** rehace todo desde los PDF, en este orden.
-  0. Controla que la tabla `rag.Fragmento` tenga las columnas de la página. Si faltan, porque la base se creó antes y no se actualizó, no borra nada y lanza un error que dice que se corra `sqlase.sql`: sin esas columnas el `Cargador` no podría guardar ningún fragmento y la base quedaría vacía.
+  0. Controla que la tabla `rag.Fragmento` tenga las columnas de la página. Si faltan, porque la base se creó antes y no se actualizó, no borra nada y lanza un error que dice que se corra `sql\base.sql`: sin esas columnas el `Cargador` no podría guardar ningún fragmento y la base quedaría vacía.
   1. Deja todos los documentos en `pendiente`, con los intentos en 0. Desde acá ninguno aparece en las búsquedas, y si lo que sigue se corta, lo rehace el `Cargador`, que borra lo viejo de cada documento antes de procesarlo.
   2. Borra todos los fragmentos, de a 20.000: un solo borrado de un millón de filas tarda demasiado y traba la tabla.
   3. Borra la colección de Qdrant, si existe.
@@ -835,12 +836,16 @@ RAG-BASICO\
 | `DocumentoFila` | `Estado`, `Detalle` | `string`, `string?` | El estado (`pendiente`, `listo`, `sin texto` o `error`) y el motivo, si falló o si el texto salió dudoso |
 | `DocumentoFila` | `Fragmentos` | `int` | Cuántos fragmentos tiene |
 | `DocumentoFila` | `FechaCarga` | `DateTime` | Cuándo se anotó |
+| `AvanceDeCarga` | `Archivo` | `string` | El nombre del PDF que se está procesando |
+| `AvanceDeCarga` | `Paso` | `string` | El paso en que está: "trayendo el PDF", "leyendo el PDF", "cortando el texto" o "calculando los vectores" |
+| `AvanceDeCarga` | `Hechos`, `Total` | `int` | Cuántos fragmentos ya tienen su vector y cuántos fragmentos son. `Total` es 0 mientras todavía no se cortó el texto |
 | `ResumenDocumentos` | `Listos`, `Pendientes`, `SinTexto`, `ConError` | `int` | Cuántos documentos hay en cada estado |
 | `ResumenDocumentos` | `Fragmentos` | `int` | Cuántos fragmentos hay en total |
 | `ResumenDocumentos` | `DocumentosPorMinuto` | `double` | La velocidad de la carga en los últimos 10 minutos |
 | `ResumenDocumentos` | `TiempoQueFalta` | `string` | Lo que falta, en palabras; vacío si no hay pendientes |
 | `ResumenDocumentos` | `Pagina` | `List<DocumentoFila>` | Una página de 50 documentos de la lista |
 | `ResumenDocumentos` | `Aviso` | `string` | Por qué está frenada la carga, si un servidor no responde; vacío si anda |
+| `ResumenDocumentos` | `EnCurso` | `AvanceDeCarga?` | Por dónde va el documento que se está procesando; `null` si no hay ninguno |
 
 ## RagBasico.Api\Ollama.cs
 
@@ -979,7 +984,7 @@ RAG-BASICO\
 
 ### POST /documentos
 
-- **Recibe:** un formulario (`multipart/form-data`) con uno o más PDF en el campo `archivos`. Es lo que manda la página cuando se le sueltan archivos.
+- **Recibe:** un formulario (`multipart/form-data`) con uno o más PDF en el campo `archivos`. Es lo que manda la página cuando se le sueltan archivos. La página lo manda con `XMLHttpRequest`, para mostrar cuánto lleva enviado; para la API es un pedido como cualquier otro.
 - **Devuelve:** el `InformeAnotado`: cuántos nuevos, sin cambios, reemplazados y rechazados, y el detalle. Los PDF solo quedan anotados como pendientes: los procesa el trabajo en segundo plano. Si la subida pasa de `Rag:MegasPorSubida`, un error 413; si no es un formulario o no trae ningún archivo, un 400.
 - **La atiende:** una función de `Program.cs` que lee cada archivo en memoria, arma la lista de `ArchivoSubido` y llama a Documentos.AnotarSubidosAsync.
 - **Desde:** fase-9-local.
@@ -996,8 +1001,8 @@ RAG-BASICO\
 ### GET /documentos
 
 - **Recibe:** si se quiere, `estado` (`pendiente`, `listo`, `sin texto` o `error`) y `pagina` en la dirección. Por ejemplo: `/documentos?estado=error&pagina=2`. Sin `estado`, todos; sin `pagina`, la primera.
-- **Devuelve:** el `ResumenDocumentos`: cuántos documentos hay en cada estado, cuántos fragmentos, la velocidad de la carga, lo que falta, una página de 50 documentos y, si la carga está frenada, el aviso que dice por qué. Con un estado que no existe, un error 400 que lista los estados.
-- **La atiende:** una función de `Program.cs` que controla el estado contra `Documentos.Estados`, llama a Documentos.ResumirAsync y le pone el aviso de `Procesador.Aviso` con `with`, que copia el record cambiando solo ese campo.
+- **Devuelve:** el `ResumenDocumentos`: cuántos documentos hay en cada estado, cuántos fragmentos, la velocidad de la carga, lo que falta, una página de 50 documentos, el aviso que dice por qué está frenada la carga, si lo está, y `enCurso`: por dónde va el documento que se está procesando, o `null` si no hay ninguno. Con un estado que no existe, un error 400 que lista los estados.
+- **La atiende:** una función de `Program.cs` que controla el estado contra `Documentos.Estados`, llama a Documentos.ResumirAsync y le pone el aviso de `Procesador.Aviso` y el avance de `Cargador.EnCurso` con `with`, que copia el record cambiando solo esos dos campos.
 - **Desde:** fase-9-local.
 - **Cambió en:** nada todavía.
 
@@ -1473,8 +1478,11 @@ RAG-BASICO\
 - **Responsabilidad:** la página para cargar documentos y seguir la carga. La sirve la propia API en `http://127.0.0.1:5089/documentos.html`.
 - **Contiene:** HTML, el estilo propio de esta página y un script, sin nada de internet. Usa `estilos.css` y `estado.js`. El script:
   - sube los PDF que se sueltan en la zona, o que se eligen con un clic, a `POST /documentos`, y muestra el informe: cuántos nuevos, reemplazados, ya cargados y rechazados;
+  - mientras los manda, muestra la barra de la subida: "Subiendo 3 archivos: 45 %" y, cuando ya se envió todo, "Guardando 3 archivos en la base...". Para eso ese pedido se hace con `XMLHttpRequest`, en la función `enviarConAvance`, y no con `fetch`, que no informa cuánto lleva enviado;
   - prende el botón "Importar de la base de origen" solo si `GET /info` dice que hay una configurada, y entonces llama a `POST /documentos/importar`;
-  - muestra los números de `GET /documentos` (listos, pendientes, sin texto, con error y fragmentos), la velocidad y lo que falta, y se actualiza solo: cada 5 segundos si hay pendientes, cada 30 si no;
+  - muestra los números de `GET /documentos` (listos, pendientes, sin texto, con error y fragmentos), la velocidad y lo que falta, y se actualiza solo: cada 2 segundos si se está procesando un documento, cada 5 si solo hay pendientes, cada 30 si no;
+  - con la función `dibujarBarras`, muestra dos barras del procesado. La del total, mientras haya pendientes: "Documentos: 16 de 17 procesados", donde procesados son los listos, los sin texto y los con error. Y la del documento en curso, con el `enCurso` de `GET /documentos`: "Procesando archivo.pdf: 224 de 351 fragmentos (calculando los vectores)". Mientras todavía no se sabe cuántos fragmentos son, esa barra se mueve sin porcentaje y dice el paso: "Procesando archivo.pdf: leyendo el PDF...";
+  - las tres barras son el elemento `<progress>` del navegador, sin ninguna librería;
   - si la carga está frenada porque un servidor no responde, muestra en rojo el aviso que manda `GET /documentos`, en lugar de la velocidad;
   - lista los documentos de a 50, con un filtro por estado y los botones "Anterior" y "Siguiente"; cada fila tiene el estado, el motivo si falló y un botón "Borrar", que pide confirmación y llama a `DELETE /documentos/{id}`;
   - "Reintentar los que fallaron" llama a `POST /documentos/reintentar`, y "Reprocesar todo", después de confirmar, a `POST /documentos/reprocesar`;
