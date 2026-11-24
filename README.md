@@ -1,96 +1,107 @@
 # RAG-BASICO
 
-Un prototipo de RAG (búsqueda en documentos y respuesta redactada por un modelo de lenguaje), armado por fases con .NET 10, SQL Server, Qdrant y Ollama.
+Busca en documentos PDF y responde preguntas citando de qué documento salió cada cosa. La respuesta la redacta un modelo de lenguaje que corre en un servidor propio: ningún documento sale de la red.
 
-Cada fase agrega una pieza y queda marcada con su branch, así el proyecto se puede recorrer de la versión más chica a la final.
+Tiene cuatro piezas:
 
-**Esta es la fase 10: la versión final, lista para conectar a los servidores de la oficina.** Es el mismo código de la fase 9, que corre todo en una PC. Lo que agrega es cómo conectar cada pieza a su servidor sin tocar el código: un archivo de conexiones de ejemplo y la guía [docs/oficina.md](docs/oficina.md).
+| Pieza | Qué hace |
+|---|---|
+| La API (este repo, .NET 10) | Recibe los PDF y las preguntas, y coordina a las otras tres. Trae dos páginas para usarla |
+| SQL Server | Guarda los PDF, sus textos y el índice de búsqueda por palabras |
+| Qdrant | Guarda los vectores, para buscar por significado |
+| Ollama | Corre los dos modelos: uno calcula los vectores, el otro redacta |
 
-Hace lo de siempre (pregunta, busca y responde citando) con cada dato en un solo lugar: los PDF, los párrafos y la búsqueda por palabras en SQL Server; los vectores solo en Qdrant; los modelos en Ollama. Todo lo que conecta está en un solo bloque, `Conexiones`, de `RagBasico.Api\appsettings.json`. Los PDF se cargan arrastrándolos a la página o importándolos de otra base, y se procesan solos en segundo plano. Se arranca con doble clic en `iniciar.cmd`.
+Las cuatro pueden correr en una sola PC o cada una en su servidor. Cambiar de un caso al otro es cambiar un archivo de configuración.
 
-Para entender el código archivo por archivo: [docs/manual.md](docs/manual.md).
+## Qué se necesita
 
-## Requisitos de esta fase
+- Windows, con Windows PowerShell 5.1 y git 2.31 o posterior.
+- SDK de .NET 10: `dotnet --version`, en la carpeta del repo, tiene que decir 10.0.403 o un parche más nuevo de 10.0.4xx.
+- SQL Server con Full-Text. Se probó con 2025 Express, instancia `SQLEXPRESS`.
+- sqlcmd, para crear la base: `winget install Microsoft.Sqlcmd`.
+- Ollama 0.30 o posterior, con los modelos `qwen3.5:4b` y `qwen3-embedding:0.6b`.
+- Qdrant 1.20.2.
 
-- SDK de .NET 10. En la carpeta del repo, `dotnet --version` tiene que decir 10.0.403 o un parche más nuevo de 10.0.4xx (lo fija `global.json`).
-- SQL Server con Full-Text, instancia `SQLEXPRESS`, y sqlcmd (`winget install Microsoft.Sqlcmd`) para crear la base. Ya no hace falta que sea la versión 2025: la base no guarda vectores.
-- Ollama corriendo, con los modelos `qwen3.5:4b` y `qwen3-embedding:0.6b`.
-- Qdrant 1.20.2 en `..\RAG-BASICO-datos\qdrant\`. Lo arranca `iniciar.cmd`.
-- Windows PowerShell 5.1 y git 2.31 o posterior, para los scripts.
-- Para probar los pedidos del archivo `.http`: Visual Studio, o VS Code con la extensión "REST Client". No hace falta para usar las páginas.
+## Cómo se instala
 
-Cómo instalar cada cosa, en qué orden y cómo comprobar que anda: [docs/instalacion.md](docs/instalacion.md).
+En una sola PC: [docs/instalacion.md](docs/instalacion.md). Dice qué instalar, en qué orden, cómo comprobar cada cosa y qué hacer si algo falla.
 
-## Cómo correr esta fase
+Con cada pieza en su servidor: [docs/oficina.md](docs/oficina.md). En la PC de la API solo se instalan git y el SDK de .NET 10.
 
-SQL Server tiene que estar andando. Si su servicio arranca a mano, como administrador: `Start-Service 'MSSQL$SQLEXPRESS'`.
+## Cómo se ejecuta
 
-Una sola vez, desde la raíz del repo, se crea la base:
+Una sola vez, desde la carpeta del repo, se crea la base:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1
 ```
 
-Después, cada vez: **doble clic en `iniciar.cmd`**. Arranca Qdrant si no está andando, arranca la API y abre el navegador en `http://127.0.0.1:5090/`. Se frena con Ctrl+C en esa ventana.
+Después, cada vez: **doble clic en `iniciar.cmd`**. Arranca Qdrant si corre en esta PC y no está andando, arranca la API y abre el navegador en `http://127.0.0.1:5090/`. Se frena con Ctrl+C en esa ventana.
+
+SQL Server y Ollama tienen que estar andando. Si falta alguno, la página lo dice.
+
+## Cómo se usa
 
 Hay dos páginas:
 
-- **Preguntar** (`/`): la pregunta, el modo de búsqueda y la respuesta con sus fuentes.
+- **Preguntar** (`/`): se escribe la pregunta y se recibe la respuesta, con sus fuentes.
 - **Documentos** (`/documentos.html`): se arrastran los PDF, se ve cuántos están listos y cuántos faltan, y se borran o se vuelven a procesar.
 
-Arriba de las dos hay una franja con un punto por cada pieza (SQL Server, Full-Text, los modelos, Qdrant): verde si anda, amarillo si anda a medias y rojo si no anda, con lo que hay que hacer.
+Arriba de las dos hay una franja con un punto por cada pieza: verde si anda, amarillo si anda a medias y rojo si no anda, con lo que hay que hacer.
 
-Un PDF arrastrado queda `pendiente` y se procesa solo: se le saca el texto, se corta en fragmentos, se calculan sus vectores y se suben a Qdrant. Cuando queda `listo`, ya se le puede preguntar. Un PDF escaneado queda como `sin texto`, y uno roto, como `error`, con el motivo.
+Un PDF arrastrado queda `pendiente` y se procesa solo, en segundo plano. Cuando queda `listo`, ya se le puede preguntar. Un PDF escaneado queda como `sin texto`, y uno roto, como `error`, con el motivo.
 
-### Importar de otra base
+Si los PDF ya están guardados en otra base de SQL Server, no hace falta arrastrarlos: el botón "Importar de la base de origen" los trae. Cómo configurarlo: punto 5 de [docs/oficina.md](docs/oficina.md).
 
-Si los PDF ya están guardados en binario en otra base de SQL Server, no hace falta arrastrarlos. En `Conexiones` van la cadena de esa base (`SqlOrigen`) y dos consultas: `ConsultaLista`, que devuelve el número y el nombre de cada documento, y `ConsultaContenido`, que devuelve el binario de uno. El botón "Importar de la base de origen" los anota a todos como pendientes y se procesan igual que los arrastrados. Los PDF importados no se copian: se leen de esa base cuando se procesan.
+## Qué hace cada archivo
 
-Para probarlo sin esa base, este script arma una de prueba con los PDF de una carpeta, y dice qué poner en la configuración:
+En `RagBasico.Api\`:
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-origen-de-prueba.ps1
-```
+| Archivo | Qué hace |
+|---|---|
+| `Program.cs` | El arranque: registra las clases y define los pedidos que acepta la API |
+| `appsettings.json` | La configuración. El bloque `Conexiones` tiene todo lo que conecta con otro servidor |
+| `Documentos.cs` | Anota los PDF que se suben o se importan, lleva el estado de cada uno, los lista y los borra |
+| `Procesador.cs` | El trabajo en segundo plano: toma los documentos pendientes, de a uno |
+| `Cargador.cs` | Procesa un documento: le saca el texto, lo corta, calcula los vectores y los sube a Qdrant |
+| `Chunker.cs` | Corta un texto en fragmentos, respetando los párrafos |
+| `Buscador.cs` | Busca los fragmentos que sirven para una pregunta: por palabras, por significado o con las dos mezcladas |
+| `Rrf.cs` | Mezcla los resultados de las dos búsquedas |
+| `Redactor.cs` | Le pasa la pregunta y los fragmentos al modelo, y devuelve la respuesta con sus fuentes |
+| `Validador.cs` | Revisa la pregunta antes de buscar |
+| `Ollama.cs` | Habla con Ollama: pide vectores y pide la redacción |
+| `Qdrant.cs` | Habla con Qdrant: sube, busca y borra vectores |
+| `Salud.cs` | Revisa cada pieza y dice cuál falla y qué hacer. Alimenta la franja de las páginas |
+| `DetectorDeCaidas.cs`, `ErrorDeServicio.cs`, `Errores.cs`, `ManejadorDeErrores.cs` | Hacen que un error diga qué servidor falló, en lugar de un error genérico |
+| `Modelos.cs` | Los datos que van y vienen entre las clases y en los pedidos |
+| `RagBasico.Api.http` | Un ejemplo de cada pedido, para probar la API sin las páginas |
+| `wwwroot\` | Las dos páginas, la franja de estado y los estilos |
 
-### Otros servidores
+En el resto del repo:
 
-Para conectar la API a servidores de otra máquina no se toca el código ni `appsettings.json`: se copia `conexiones.oficina.ejemplo.json` a `RagBasico.Api\conexiones.json` y se completa con los nombres reales. Git ignora ese archivo, así los nombres de los servidores y las claves no se suben. El paso a paso, servidor por servidor, con cómo comprobar cada uno y qué hacer si algo falla: [docs/oficina.md](docs/oficina.md).
+| Archivo | Qué hace |
+|---|---|
+| `iniciar.cmd` | El doble clic: corre `scripts\iniciar.ps1` |
+| `scripts\iniciar.ps1` | Arranca Qdrant, si corre en esta PC, y después la API |
+| `scripts\iniciar-qdrant.ps1` | Arranca Qdrant escuchando solo en esta PC |
+| `scripts\crear-base.ps1` | Crea la base: corre `sql\base.sql` |
+| `scripts\crear-origen-de-prueba.ps1` | Arma una base con PDF adentro, para probar la importación |
+| `sql\base.sql` | Las tablas y el índice Full-Text |
+| `sql\consultas-utiles.sql` | Consultas para mirar la base desde SSMS |
+| `conexiones.oficina.ejemplo.json` | El modelo para conectar la API a otros servidores |
 
-### Controlar la documentación
+Archivo por archivo, con más detalle y en el orden en que conviene leerlos: [docs/manual.md](docs/manual.md).
 
-Para controlar que la documentación coincida con el código, desde la raíz del repo:
+## Dónde tocar para conectarlo
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\controlar-docs.ps1
-```
+**A otros servidores.** No se toca el código. Se copia `conexiones.oficina.ejemplo.json` a `RagBasico.Api\conexiones.json` y se completa con los nombres reales. Git ignora ese archivo, así los nombres de los servidores y las claves no se suben. El paso a paso: [docs/oficina.md](docs/oficina.md).
 
-## Fases
-
-| Fase | Branch | Qué agrega | Puerto | Base | Número principal | Detalle |
-|---|---|---|---|---|---|---|
-| 0 | `fase-0-base` | El esqueleto: configuración del repo, API vacía, documentación y scripts | 5080 | no usa | ninguno | [fase-0-base.md](docs/fases/fase-0-base.md) |
-| 1 | `fase-1-ollama` | El cliente HTTP de Ollama y `POST /preguntar`, sin documentos | 5081 | no usa | tokens por segundo: pendiente | [fase-1-ollama.md](docs/fases/fase-1-ollama.md) |
-| 2 | `fase-2-rag-minimo` | Carga de PDF en SQL Server, búsqueda por palabras y respuesta con citas | 5082 | `RagBasico_F2` | ms por respuesta: pendiente | [fase-2-rag-minimo.md](docs/fases/fase-2-rag-minimo.md) |
-| 3 | `fase-3-medicion` | El examen, el evaluador, el manifiesto de los PDF y el registro de consultas | 5083 | `RagBasico_F3` | "entre los 5" por palabras: pendiente | [fase-3-medicion.md](docs/fases/fase-3-medicion.md) |
-| 4 | `fase-4-carga` | Carga incremental con huella, borrado de lo que ya no está, corte por párrafos y aviso de escaneados | 5084 | `RagBasico_F4` | segunda carga "sin cambios" y "entre los 5": pendiente | [fase-4-carga.md](docs/fases/fase-4-carga.md) |
-| 5 | `fase-5-vectores` | Vectores en SQL Server, búsqueda por significado con `VECTOR_DISTANCE` y el examen en los dos modos | 5085 | `RagBasico_F5` | "entre los 5" por vectores contra palabras: pendiente | [fase-5-vectores.md](docs/fases/fase-5-vectores.md) |
-| 6 | `fase-6-hibrida` | Búsqueda híbrida con RRF, las dos búsquedas en paralelo y la página de la demo | 5086 | `RagBasico_F6` | "entre los 5" de los tres modos: pendiente | [fase-6-hibrida.md](docs/fases/fase-6-hibrida.md) |
-| 7 | `fase-7-qdrant` | Qdrant como índice de vectores, sincronizado con SQL y con respaldo si se apaga; `/salud` y los modelos cargados al arrancar. Acá queda `main` | 5087 | `RagBasico_F7` | "entre los 5" de `vectores-qdrant` contra `vectores`: pendiente | [fase-7-qdrant.md](docs/fases/fase-7-qdrant.md) |
-| 8 | `fase-8-validaciones` | Validación de la pregunta, errores claros en formato ProblemDetails y chequeos al arrancar | 5088 | `RagBasico_F8` | ninguno nuevo | [fase-8-validaciones.md](docs/fases/fase-8-validaciones.md) |
-| 9 | `fase-9-local` | Cada dato en un solo lugar: vectores solo en Qdrant, toda la conexión en el bloque `Conexiones`, carga de PDF por la página o desde otra base, en segundo plano, y arranque con doble clic. Se van el examen y la carpeta de PDF | 5089 | `RagBasico_F9` | fragmentos por segundo al cargar: entre 6 y 13 | [fase-9-local.md](docs/fases/fase-9-local.md) |
-| 10 | `fase-10-oficina` | El mismo código de la fase 9, conectado a servidores de otras máquinas: el archivo de conexiones de ejemplo y la guía para conectar SQL Server, Qdrant, Ollama y la base donde ya están los PDF | 5090 | `RagBasico_F10` | contra los servidores de la oficina: pendiente | [fase-10-oficina.md](docs/fases/fase-10-oficina.md) |
-
-Para ver qué agregó una fase: `git diff fase-9-local fase-10-oficina`, o la página "compare" de GitHub entre las dos branches. Las fases anteriores siguen en sus branches: `git switch fase-8-validaciones` abre la fase 8, con su propia documentación.
+**A la solución del trabajo.** Otro sistema puede mandarle la pregunta a la API y recibir la respuesta, sin pasar por la página. Sirve con cualquier lenguaje y versión, también VB.NET sobre .NET Framework 3.5. Qué pedido mandar, un ejemplo en VB.NET y qué líneas cambiar si la API corre en otra máquina: [docs/integracion.md](docs/integracion.md).
 
 ## Documentación
 
-- [docs/manual.md](docs/manual.md): el manual de lectura. Recorre los archivos en el orden en que conviene leerlos, siguiendo un PDF y una pregunta de punta a punta.
-- [docs/instalacion.md](docs/instalacion.md): qué instalar, en qué orden, cómo comprobar que anda y qué hacer si algo falla.
-- [docs/oficina.md](docs/oficina.md): cómo conectar cada pieza a su servidor, comprobarlo y cargar los documentos de otra base.
-- [docs/arquitectura.md](docs/arquitectura.md): las piezas, los recorridos, las tablas y la configuración de esta versión.
-- [docs/responsabilidades.md](docs/responsabilidades.md): qué hace cada archivo, clase, función y endpoint.
-- [docs/fases/](docs/fases/): un documento por fase, con lo que cambió, el orden de lectura y los resultados.
-
-## Erratas
-
-Las erratas de esta versión están en `docs/erratas.md` de la branch de fase más nueva.
+- [docs/instalacion.md](docs/instalacion.md): instalar todo en una PC.
+- [docs/oficina.md](docs/oficina.md): conectar cada pieza a su servidor y cargar los documentos de otra base.
+- [docs/integracion.md](docs/integracion.md): usarlo desde otro sistema.
+- [docs/manual.md](docs/manual.md): el código, archivo por archivo.
+- [docs/arquitectura.md](docs/arquitectura.md): las piezas, los recorridos, las tablas y la configuración.

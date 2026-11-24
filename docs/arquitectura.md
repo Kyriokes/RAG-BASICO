@@ -1,6 +1,6 @@
 # Arquitectura
 
-Cómo se arma esta versión, `fase-10-oficina`. El código es el de `fase-9-local`; cambian la configuración y la guía para conectar otros servidores. Cada fase actualiza este documento, así que en cada branch describe esa fase.
+Cómo está armado el proyecto: las piezas, los recorridos, las tablas y la configuración.
 
 ## 1. Piezas
 
@@ -123,7 +123,7 @@ Se mezclan puestos y no puntajes porque el `RANK` del Full-Text y la distancia c
 
 ## 3. Tablas
 
-Base de `Conexiones:SqlTextos` (en casa, `RagBasico_F10`), esquema `rag`. Todo `sql\base.sql` usa SQL que entiende un SQL Server 2014.
+Base de `Conexiones:SqlTextos` (en casa, `RagBasico`), esquema `rag`. Todo `sql\base.sql` usa SQL que entiende un SQL Server 2014.
 
 | Tabla | Columna | Tipo | Para qué |
 |---|---|---|---|
@@ -168,9 +168,9 @@ En `RagBasico.Api\appsettings.json`. El bloque `Conexiones` es todo lo que conec
 
 | Clave | Valor | Para qué |
 |---|---|---|
-| `Conexiones:SqlTextos` | `Server=localhost\SQLEXPRESS;Database=RagBasico_F10;...` | La base del RAG: documentos, fragmentos, Full-Text y consultas |
+| `Conexiones:SqlTextos` | `Server=localhost\SQLEXPRESS;Database=RagBasico;...` | La base del RAG: documentos, fragmentos, Full-Text y consultas |
 | `Conexiones:Qdrant` | `http://127.0.0.1:6333` | Dónde escucha Qdrant. Con `127.0.0.1` y no `localhost`, porque en casa Qdrant escucha solo en IPv4 |
-| `Conexiones:ColeccionQdrant` | `fragmentos_f10` | La colección donde van los vectores. "Reprocesar todo" borra esta colección y ninguna otra |
+| `Conexiones:ColeccionQdrant` | `fragmentos` | La colección donde van los vectores. "Reprocesar todo" borra esta colección y ninguna otra |
 | `Conexiones:ClaveQdrant` | vacío | La clave de Qdrant, si el servidor pide una. Va en el encabezado `api-key` de cada pedido |
 | `Conexiones:Ollama` | `http://127.0.0.1:11434` | Dónde escucha Ollama |
 | `Conexiones:ModeloChat` | `qwen3.5:4b` | El modelo que redacta las respuestas |
@@ -184,7 +184,6 @@ El resto no hace falta tocarlo para cambiar de servidor:
 | Clave | Valor | Para qué |
 |---|---|---|
 | `Rag:Proyecto` | `RAG básico` | El nombre del proyecto que devuelve `GET /info` |
-| `Rag:Fase` | `fase-10-oficina` | La fase de esta versión. La usan `GET /info` y `scripts\controlar-docs.ps1` |
 | `Rag:PalabrasPorFragmento` | `300` | El tamaño máximo de cada fragmento, en palabras. Entra en la huella |
 | `Rag:Solapamiento` | `50` | Cuántas palabras repite cada fragmento del anterior. También entra en la huella |
 | `Rag:TopK` | `5` | Cuántos fragmentos devuelve la búsqueda y se le pasan al modelo |
@@ -215,13 +214,13 @@ Fuera de `appsettings.json`:
 
 Cómo instalar cada pieza y comprobar que anda: [`docs\instalacion.md`](instalacion.md).
 
-| Qué | Dónde | Desde |
-|---|---|---|
-| Ollama y el modelo `qwen3.5:4b` | Instalados en la PC; Ollama escucha en `127.0.0.1:11434` | fase-1-ollama |
-| SQL Server, con Full-Text | Instancia `localhost\SQLEXPRESS`, base `RagBasico_F10` | fase-2-rag-minimo |
-| El modelo `qwen3-embedding:0.6b` | En Ollama: `ollama pull qwen3-embedding:0.6b` | fase-5-vectores |
-| Qdrant 1.20.2 y sus datos | `qdrant.exe` en `..\RAG-BASICO-datos\qdrant\`, datos en su subcarpeta `storage` | fase-7-qdrant |
-| Los PDF de prueba | Cualquier carpeta, por ejemplo `..\RAG-BASICO-datos\documentos\`: se arrastran a la página. Ya no hay una carpeta configurada | fase-9-local |
-| La base de origen de prueba | Base `RagBasico_Origen`, creada por `scripts\crear-origen-de-prueba.ps1` | fase-9-local |
-| Las conexiones a otros servidores | `RagBasico.Api\conexiones.json`, que git ignora | fase-9-local |
-| Los servidores de la oficina: SQL Server, Qdrant, Ollama y la base donde ya están los PDF | Cada uno en su máquina. Cómo prepararlos y comprobarlos: [`docs\oficina.md`](oficina.md) | fase-10-oficina |
+| Qué | Dónde |
+|---|---|
+| Ollama y el modelo `qwen3.5:4b` | Instalados en la PC; Ollama escucha en `127.0.0.1:11434` |
+| SQL Server, con Full-Text | Instancia `localhost\SQLEXPRESS`, base `RagBasico` |
+| El modelo `qwen3-embedding:0.6b` | En Ollama: `ollama pull qwen3-embedding:0.6b` |
+| Qdrant 1.20.2 y sus datos | `qdrant.exe` en `..\RAG-BASICO-datos\qdrant\`, datos en su subcarpeta `storage` |
+| Los PDF de prueba | Cualquier carpeta, por ejemplo `..\RAG-BASICO-datos\documentos\`: se arrastran a la página |
+| La base de origen de prueba | Base `RagBasico_Origen`, creada por `scripts\crear-origen-de-prueba.ps1` |
+| Las conexiones a otros servidores | `RagBasico.Api\conexiones.json`, que git ignora |
+| Los servidores de la oficina: SQL Server, Qdrant, Ollama y la base donde ya están los PDF | Cada uno en su máquina. Cómo prepararlos y comprobarlos: [`docs\oficina.md`](oficina.md) |

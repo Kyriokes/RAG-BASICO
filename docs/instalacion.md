@@ -1,6 +1,6 @@
 # Instalación
 
-Qué hay que instalar en Windows para correr esta versión en una sola PC (para conectarla a servidores de otras máquinas, ver [oficina.md](oficina.md)), cómo comprobar que cada pieza anda y qué hacer si algo falla. La columna "Desde" dice desde qué fase hace falta cada cosa, para quien abra una branch anterior.
+Qué hay que instalar en Windows para correr esta versión en una sola PC (para conectarla a servidores de otras máquinas, ver [oficina.md](oficina.md)), cómo comprobar que cada pieza anda y qué hacer si algo falla.
 
 Los comandos son para Windows PowerShell. Los que dicen "como administrador" van en una consola abierta como administrador: en el menú Inicio, buscá "Windows PowerShell", hacé clic derecho y elegí "Ejecutar como administrador".
 
@@ -12,21 +12,19 @@ Esta guía usa el repo en `F:\RAG-BASICO\` y, al lado, la carpeta de datos `F:\R
 
 ## Qué se instala
 
-| Qué | Versión | Desde | Para qué | Cómo se comprueba |
-|---|---|---|---|---|
-| Windows PowerShell | 5.1, viene con Windows | fase-0-base | Los scripts de `scripts\` | `$PSVersionTable.PSVersion` muestra 5 en `Major` y 1 en `Minor` |
-| git | 2.31 o posterior | fase-0-base | Bajar el repo, las branches de las fases y los scripts | `git --version` |
-| SDK de .NET 10 | 10.0.403, o un parche más nuevo de la banda 10.0.4xx | fase-0-base | Compilar y correr la API | `dotnet --version`, parado en la carpeta del repo |
-| Un editor | Visual Studio 2026, o VS Code con la extensión REST Client | fase-0-base | Leer el código y mandar los pedidos del `.http` | Visual Studio abre `RagBasico.slnx`; en VS Code, el `.http` muestra "Send Request" arriba de cada pedido |
-| Ollama | 0.30 o posterior: `qwen3.5:4b` no se baja con una más vieja | fase-1-ollama | Correr los modelos | `http://127.0.0.1:11434` dice "Ollama is running" |
-| El modelo `qwen3.5:4b` | | fase-1-ollama | Redactar las respuestas | `ollama list` |
-| SQL Server 2025 Express, con Full-Text | | fase-2-rag-minimo | La base: los documentos, los textos y el índice de palabras. Desde la fase 9 no guarda vectores, así que sirve también una versión anterior con Full-Text | Una consulta con `sqlcmd` (punto 6) |
-| sqlcmd | 1.10 o posterior | fase-2-rag-minimo | Lo usa `scripts\crear-base.ps1` para crear la base | `sqlcmd --version` |
-| SSMS | 21 o posterior | fase-2-rag-minimo | Mirar la base y correr `sql\consultas-utiles.sql`. Opcional | Se conecta a `localhost\SQLEXPRESS` |
-| El modelo `qwen3-embedding:0.6b` | | fase-5-vectores | Calcular los vectores | `ollama list` |
-| Qdrant | 1.20.2 | fase-7-qdrant | El índice de vectores | `http://127.0.0.1:6333` dice `"version":"1.20.2"` |
-
-Para correr una fase vieja alcanza con lo de las filas hasta esa fase. Las fases 2 a 8 leen los PDF de una carpeta y tienen su propia guía, en `docs\instalacion.md` de esas branches. Desde la fase 9 los PDF se arrastran a la página.
+| Qué | Versión | Para qué | Cómo se comprueba |
+|---|---|---|---|
+| Windows PowerShell | 5.1, viene con Windows | Los scripts de `scripts\` | `$PSVersionTable.PSVersion` muestra 5 en `Major` y 1 en `Minor` |
+| git | 2.31 o posterior | Bajar el repo. Los scripts lo usan para ubicar la carpeta de datos | `git --version` |
+| SDK de .NET 10 | 10.0.403, o un parche más nuevo de la banda 10.0.4xx | Compilar y correr la API | `dotnet --version`, parado en la carpeta del repo |
+| Un editor | Visual Studio 2026, o VS Code con la extensión REST Client | Leer el código y mandar los pedidos del `.http` | Visual Studio abre `RagBasico.slnx`; en VS Code, el `.http` muestra "Send Request" arriba de cada pedido |
+| Ollama | 0.30 o posterior: `qwen3.5:4b` no se baja con una más vieja | Correr los modelos | `http://127.0.0.1:11434` dice "Ollama is running" |
+| El modelo `qwen3.5:4b` | | Redactar las respuestas | `ollama list` |
+| SQL Server 2025 Express, con Full-Text | | La base: los documentos, los textos y el índice de palabras. No guarda vectores, así que sirve también una versión anterior con Full-Text | Una consulta con `sqlcmd` (punto 6) |
+| sqlcmd | 1.10 o posterior | Lo usa `scripts\crear-base.ps1` para crear la base | `sqlcmd --version` |
+| SSMS | 21 o posterior | Mirar la base y correr `sql\consultas-utiles.sql`. Opcional | Se conecta a `localhost\SQLEXPRESS` |
+| El modelo `qwen3-embedding:0.6b` | | Calcular los vectores | `ollama list` |
+| Qdrant | 1.20.2 | El índice de vectores | `http://127.0.0.1:6333` dice `"version":"1.20.2"` |
 
 ## 1. git y el repo
 
@@ -39,7 +37,7 @@ Para correr una fase vieja alcanza con lo de las filas hasta esa fase. Las fases
    cd F:\RAG-BASICO
    ```
 
-   Los comandos que dicen "parado en la carpeta del repo" se corren ahí, después de ese `cd`. No bajes el ZIP que ofrece GitHub: sin la carpeta `.git` no andan los scripts ni las branches de las fases.
+   Los comandos que dicen "parado en la carpeta del repo" se corren ahí, después de ese `cd`. No bajes el ZIP que ofrece GitHub: sin la carpeta `.git` no andan los scripts.
 
 ## 2. El SDK de .NET 10
 
@@ -82,7 +80,7 @@ Si Ollama no está corriendo (`http://127.0.0.1:11434` no responde), abrilo desd
 
 Con una placa de video, Ollama responde mucho más rápido. Con NVIDIA pide el driver 551.61 o posterior, y para las series GTX 900 y 1000, el 570 o posterior. Con un modelo cargado, `ollama ps` dice dónde corre, en la columna `PROCESSOR`: `100% GPU` es lo esperado; con `100% CPU` anda, pero cada respuesta tarda mucho más.
 
-Ollama se actualiza solo: baja cada versión nueva y la instala cuando elegís "Restart to update" en su ícono, o la próxima vez que arranca con Windows. Si la semana de una demo no querés que cambie, apagá "Auto-download updates" en su "Settings".
+Ollama se actualiza solo: baja cada versión nueva y la instala cuando elegís "Restart to update" en su ícono, o la próxima vez que arranca con Windows. Si en una semana importante no querés que cambie, apagá "Auto-download updates" en su "Settings".
 
 ## 5. SQL Server 2025 Express, con Full-Text
 
@@ -129,7 +127,7 @@ Con el servicio de SQL Server andando, parado en la carpeta del repo, una sola v
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1
 ```
 
-Crea la base `RagBasico_F10` (la de `Conexiones:SqlTextos`, en `RagBasico.Api\appsettings.json`) con sus tres tablas y el índice Full-Text. Se puede correr de nuevo sin romper nada.
+Crea la base `RagBasico` (la de `Conexiones:SqlTextos`, en `RagBasico.Api\appsettings.json`) con sus tres tablas y el índice Full-Text. Se puede correr de nuevo sin romper nada.
 
 Los PDF no van en ninguna carpeta especial: se arrastran a la página "Documentos" y quedan guardados en la base. Tienen que tener texto seleccionable: los escaneados no se pueden leer, y quedan como `sin texto`.
 

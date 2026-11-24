@@ -27,7 +27,7 @@ $codificacionAnterior = [Console]::OutputEncoding
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 try {
     if (-not $Carpeta) {
-        # La carpeta de datos está al lado de la carpeta principal del repo, también si se corre desde una carpeta de fase:
+        # La carpeta de datos está al lado de la carpeta principal del repo, también si se corre desde otra carpeta de trabajo de git:
         # --git-common-dir es la carpeta .git de la principal en los dos casos.
         $comun = & git rev-parse --path-format=absolute --git-common-dir
         if ($LASTEXITCODE -ne 0) {

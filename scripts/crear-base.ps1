@@ -10,7 +10,7 @@ Usa la autenticación de Windows: es para la base de casa. En un servidor con us
 Si el servidor es de esta PC, se conecta por memoria compartida (lpc:), sin el servicio SQL Server Browser.
 
 .PARAMETER Base
-Nombre de la base. Por defecto, el de la cadena de conexión (por ejemplo, RagBasico_F9).
+Nombre de la base. Por defecto, el de la cadena de conexión (por ejemplo, RagBasico).
 
 .PARAMETER Servidor
 Servidor e instancia de SQL Server. Por defecto, el de la cadena de conexión (localhost\SQLEXPRESS).

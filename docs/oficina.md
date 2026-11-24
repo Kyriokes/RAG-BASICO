@@ -1,6 +1,6 @@
 # Conectar con los servidores de la oficina
 
-Cómo pasar de "todo en una PC" a "cada pieza en su servidor". El código es el mismo de la fase 9: lo único que cambia es un archivo, `RagBasico.Api\conexiones.json`.
+Cómo pasar de "todo en una PC" a "cada pieza en su servidor". El código es el mismo: lo único que cambia es un archivo, `RagBasico.Api\conexiones.json`.
 
 Seguí los puntos en orden. Cada uno termina con un comando para comprobarlo: no pases al siguiente hasta que ande.
 
@@ -223,17 +223,16 @@ Es opcional: sin esto, los PDF se cargan arrastrándolos. La API solo lee de est
 
 **Comprobar:** `Test-NetConnection SERVIDOR-VIEJO -Port 1433`.
 
-Un SQL Server viejo puede no aceptar la conexión cifrada que la API pide por defecto. Si la franja muestra un error de `SSL` o de `pre-login handshake`, está en la tabla del punto 9. Conviene probar esta conexión antes del día de la demo.
+Un SQL Server viejo puede no aceptar la conexión cifrada que la API pide por defecto. Si la franja muestra un error de `SSL` o de `pre-login handshake`, está en la tabla del punto 9. Conviene probar esta conexión antes que las demás.
 
 ## 6. La PC donde corre el RAG
 
 1. Instalar git y el SDK de .NET 10 (puntos 1 y 2 de [`instalacion.md`](instalacion.md)).
-2. Bajar el repo y pararse en la fase 10:
+2. Bajar el repo:
 
    ```powershell
    git clone <dirección del repo> C:\RAG-BASICO
    cd C:\RAG-BASICO
-   git switch fase-10-oficina
    ```
 
 3. Copiar el ejemplo y completarlo:

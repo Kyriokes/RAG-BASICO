@@ -95,7 +95,6 @@ app.UseStaticFiles();
 app.MapGet("/info", () => new
 {
     proyecto = app.Configuration["Rag:Proyecto"],
-    fase = app.Configuration["Rag:Fase"],
     dotnet = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
     // La página de documentos prende el botón de importar solo si hay una base de origen configurada.
     origenConfigurado = (app.Configuration["Conexiones:SqlOrigen"] ?? "") != ""

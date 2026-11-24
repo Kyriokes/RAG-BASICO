@@ -2,9 +2,9 @@
 
 Para leer el proyecto entero y poder explicar cada archivo. Sigue dos recorridos de punta a punta, el de un PDF que se carga y el de una pregunta que se responde, y después lo que sostiene a los dos.
 
-Cómo usarlo: abrí cada archivo al lado de este documento y leelo en el orden que dice. Cada archivo tiene acá qué hace, por qué existe, en qué orden leer sus funciones, lo que es nuevo viniendo de VB.NET, y las preguntas que te pueden hacer, con su respuesta.
+Cómo usarlo: abrí cada archivo al lado de este documento y leelo en el orden que dice. Cada archivo tiene acá qué hace, por qué existe, en qué orden leer sus funciones, lo que es nuevo viniendo de VB.NET, y las preguntas más comunes, con su respuesta.
 
-El detalle de cada función está en [`responsabilidades.md`](responsabilidades.md); las tablas y la configuración, en [`arquitectura.md`](arquitectura.md).
+El detalle de cada función está en el propio código, en el comentario `/// <summary>` que tiene arriba. Las tablas y la configuración están en [`arquitectura.md`](arquitectura.md).
 
 ## 1. El proyecto en diez líneas
 
@@ -47,7 +47,7 @@ El detalle de cada función está en [`responsabilidades.md`](responsabilidades.
 
 **Por qué importa:** es la respuesta a "¿qué hay que tocar para instalarlo en otro lado?". Diez líneas, en un solo lugar.
 
-**Te pueden preguntar:**
+**Preguntas frecuentes:**
 
 - *¿Las claves quedan en el repo?* No. Para otros servidores se crea `conexiones.json` al lado, que git ignora, con las líneas que cambian. `Program.cs` lo carga si existe.
 - *¿Por qué `127.0.0.1` y no `localhost`?* En casa Qdrant escucha solo en IPv4, y `localhost` a veces resuelve a IPv6.
@@ -62,7 +62,7 @@ El detalle de cada función está en [`responsabilidades.md`](responsabilidades.
 
 Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que hace la búsqueda por palabras.
 
-**Te pueden preguntar:**
+**Preguntas frecuentes:**
 
 - *¿Por qué no hay una columna con los vectores?* Porque están solo en Qdrant. Tenerlos en los dos lados obligaba a mantenerlos iguales, y a usar SQL Server 2025, que es el único que tiene el tipo `VECTOR`.
 - *¿Qué es `ON DELETE CASCADE`?* Si se borra un documento, SQL Server borra solo sus fragmentos.
@@ -88,7 +88,7 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 | `await` | `Await` | Espera el resultado sin trabar el hilo |
 | `string? modo` | `modo As String` (puede ser `Nothing`) | El `?` avisa que puede venir `null` |
 
-**Te pueden preguntar:**
+**Preguntas frecuentes:**
 
 - *¿Dónde está la lógica?* No acá. `Program.cs` solo conecta: cada pedido llama a una clase.
 - *¿Qué es `CancellationToken`?* Un aviso de "el que pidió ya se fue". Si se cierra el navegador a mitad de una pregunta, la API corta en vez de seguir trabajando para nadie.
@@ -102,7 +102,7 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 
 **Orden de lectura del JavaScript:** `pedir` (habla con la API y muestra el error si lo hay), `subir` (arma un formulario con los archivos y lo manda a `POST /documentos`), `actualizar` (pide `GET /documentos` cada 5 segundos si hay pendientes, cada 30 si no) y `dibujar`.
 
-**Te pueden preguntar:**
+**Preguntas frecuentes:**
 
 - *¿Por qué `textContent` y no `innerHTML`?* Porque el nombre de un archivo lo elige quien lo sube. Con `innerHTML`, un nombre con etiquetas se ejecutaría como parte de la página.
 - *¿La página procesa algo?* No. Solo manda los archivos y mira el estado. Se puede cerrar y la carga sigue.
@@ -132,7 +132,7 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 | `public sealed record Pendiente(int DocumentoId, ...)` | una `Class` con propiedades de solo lectura y constructor | Un tipo de datos en una línea |
 | `SemaphoreSlim Turno` | `SyncLock`, pero que se puede esperar con `Await` | Un candado: lo toma uno por vez |
 
-**Te pueden preguntar:**
+**Preguntas frecuentes:**
 
 - *¿Qué es la huella?* El sha256 de los bytes del PDF más los parámetros de corte. Si se sube de nuevo el mismo archivo, la huella es igual y no se hace nada. Si cambia el PDF, o cambia la forma de cortarlo, la huella cambia y se reprocesa.
 - *¿Hay riesgo de inyección de SQL?* No en los datos: van siempre como parámetros (`@archivo`), nunca pegados al texto del SQL. Las dos consultas de la base de origen sí son texto, pero las escribe quien administra, en la configuración; no vienen de la página.
@@ -156,7 +156,7 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 | `protected override async Task ExecuteAsync(...)` | `Protected Overrides Async Function ExecuteAsync(...)` | El método que corre de fondo |
 | `_alcances.CreateScope()` | no hay | Pide un `Cargador` nuevo para cada vuelta, igual que cada pedido HTTP recibe los suyos |
 
-**Te pueden preguntar:**
+**Preguntas frecuentes:**
 
 - *¿Qué pasa si se apaga la API a mitad de un documento?* Ese documento sigue `pendiente`. Al volver a arrancar se procesa de nuevo, desde cero.
 - *¿Por qué de a uno y no varios a la vez?* La velocidad la pone el modelo de embeddings, que atiende de a un pedido. Varios a la vez no irían más rápido, y de a uno nunca hay dos documentos pisándose.
@@ -181,7 +181,7 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 3. El `catch` del final: decide de quién fue la culpa. De un servidor (`EsDeUnServidor`): queda pendiente y se espera. No se sabe (`EsPasajero`): se reintenta hasta tres veces. Del documento: se borran los vectores que llegó a subir y queda en `error`.
 4. `SacarTexto`, `EsEscaneado`, `RevisarTexto`: las tres funciones sueltas.
 
-**Te pueden preguntar:**
+**Preguntas frecuentes:**
 
 - *¿Por qué empieza borrando?* Para que procesar dos veces el mismo documento dé siempre lo mismo. Si un intento quedó a medias, no quedan fragmentos ni vectores duplicados.
 - *¿Cómo sabe que un PDF es un escaneo?* Cuenta las palabras: menos de 40 por página en promedio. Un escaneo es una foto, no tiene texto.
@@ -200,7 +200,7 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 
 **Orden de lectura:** `Partir` y sus dos ayudantes, `SepararParrafos` y `Cerrar`.
 
-**Te pueden preguntar:**
+**Preguntas frecuentes:**
 
 - *¿Por qué 300 palabras?* Es un punto medio: entra una idea completa y el modelo de embeddings lo procesa bien. Está en la configuración.
 - *¿Qué es el solapamiento?* Cada fragmento repite las últimas 50 palabras del anterior. Así una idea que quedó cortada entre dos fragmentos aparece entera en alguno.
@@ -212,7 +212,7 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 
 **Orden de lectura:** `EmbeddingsAsync` (texto → vector, lo usa el `Cargador`), `EmbeddingPreguntaAsync` (lo mismo para la pregunta, con una instrucción adelante), `ChatAsync` (la respuesta), `ListarModelosAsync` y `CalentarAsync`.
 
-**Te pueden preguntar:**
+**Preguntas frecuentes:**
 
 - *¿Los documentos salen de la red?* No. Ollama corre en un servidor propio; nada va a internet.
 - *¿Por qué la pregunta lleva una instrucción en inglés?* Así se entrenó ese modelo de embeddings: los documentos van sin nada, y las preguntas con la instrucción adelante. Mejora lo que encuentra.
@@ -224,7 +224,7 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 
 **Orden de lectura:** `Configurar`, `AsegurarColeccionAsync`, `SubirAsync`, `BorrarDeDocumentoAsync`, `BuscarAsync`.
 
-**Te pueden preguntar:**
+**Preguntas frecuentes:**
 
 - *¿Qué es un punto?* Un vector con un id y un dato extra. El id es el `FragmentoId` de SQL y el dato extra es el `DocumentoId`.
 - *¿Cómo se borran los vectores de un documento?* Con un filtro: "borrá los puntos cuyo `documentoId` es este".
@@ -241,7 +241,7 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 
 **Qué hace:** una sola función, `RevisarPregunta`. Devuelve el motivo del rechazo, o vacío si la pregunta sirve: vacía, demasiado larga, con caracteres de control, o sin letras ni números.
 
-**Te pueden preguntar:**
+**Preguntas frecuentes:**
 
 - *¿Por qué devuelve un texto y no verdadero o falso?* Porque el motivo es lo que le llega a quien preguntó.
 
@@ -251,7 +251,7 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 
 **Orden de lectura:** la constante `Reglas` (el mensaje de sistema: es lo que hace que el modelo no invente), `ResponderAsync`, `ArmarMensaje`, `Neutralizar`, `EsSinRespuesta`, `RegistrarAsync`.
 
-**Te pueden preguntar:**
+**Preguntas frecuentes:**
 
 - *¿Cómo se evita que el modelo invente?* Tres cosas. Las reglas le dicen que use solo los fragmentos y que cite cada oración. Si no alcanza, tiene que responder una frase fija, "No encontré esa información en los documentos". Y la página muestra las fuentes, así cualquiera puede comprobar.
 - *¿Y si un PDF trae un texto que dice "ignorá las instrucciones"?* La regla 5 le dice al modelo que lo que está entre `<fragmentos>` son datos, no órdenes. Y `Neutralizar` cambia los `<` y `>` del texto, para que un PDF no pueda cerrar ese bloque por su cuenta.
@@ -267,7 +267,7 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 - **Por significado:** Ollama convierte la pregunta en un vector, Qdrant devuelve los números de los fragmentos más cercanos y SQL Server trae sus textos.
 - **Híbrida**, la que se usa por defecto: las dos a la vez, mezcladas.
 
-**Te pueden preguntar:**
+**Preguntas frecuentes:**
 
 - *¿Por qué dos búsquedas?* Se equivocan en cosas distintas. La de palabras encuentra un número de expediente o una sigla exacta, pero no entiende sinónimos. La de significado entiende "que me devuelvan la plata" como "reintegro", pero puede pasar por alto un código exacto. Juntas cubren los dos casos.
 - *¿Qué es `Task.WhenAll`?* Arranca las dos búsquedas y espera a las dos. Se tarda lo que la más lenta, no la suma.
@@ -277,7 +277,7 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 
 **Qué hace:** mezcla dos listas de resultados en una. Cada fragmento suma 1 / (60 + su puesto) por cada lista en la que aparece; quedan los de mayor puntaje.
 
-**Te pueden preguntar:**
+**Preguntas frecuentes:**
 
 - *¿Por qué por puesto y no por puntaje?* Porque el puntaje del Full-Text y la distancia entre vectores miden cosas distintas, en escalas distintas. No se pueden sumar. El puesto sí: "segundo en una lista, cuarto en la otra".
 - *¿De dónde sale el 60?* Es el valor del trabajo que propuso el método (Reciprocal Rank Fusion). Hace que estar en las dos listas pese más que estar primero en una sola.
@@ -290,7 +290,7 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 
 **Orden de lectura:** `RevisarAsync` y después un método por chequeo. Todos tienen la misma forma: un `try` que prueba la pieza y devuelve `ok` o `aviso`, y un `catch` que devuelve `error` con la dirección que probó y qué hacer.
 
-**Te pueden preguntar:**
+**Preguntas frecuentes:**
 
 - *¿Qué pasa si falta un servidor?* La API arranca igual y la franja lo muestra en rojo, con el nombre del servidor, la dirección y qué hacer.
 - *¿Cómo se sabe si Qdrant quedó desparejo con SQL?* Compara la cantidad de puntos con la cantidad de fragmentos. Si Qdrant tiene más puntos que fragmentos hay en la base, trae puntos de otra carga. Y sin pendientes, las dos cantidades tienen que ser iguales. Si no, avisa y dice "Reprocesar todo".
@@ -305,7 +305,7 @@ Son cortos y se leen juntos, en este orden:
 3. `Errores.cs`: `EsCaida` dice si un error es un servidor que no responde, o uno que sí respondió con un error.
 4. `ManejadorDeErrores.cs`: atiende cualquier error que nadie atrapó y lo convierte en una respuesta con título, detalle y código: 503 si un servidor no responde, 502 si respondió con un error, 504 si no respondió a tiempo, 400 si el pedido está mal, 413 si la subida es muy grande.
 
-**Te pueden preguntar:**
+**Preguntas frecuentes:**
 
 - *¿Qué ve el usuario si algo falla?* Nunca un "error 500" pelado. Ve qué falló y qué hacer.
 - *¿Qué es ProblemDetails?* El formato estándar para devolver errores en una API: un JSON con `title`, `detail` y `status`.
@@ -327,9 +327,8 @@ Los tipos de datos que van y vienen: lo que se manda a `/preguntar`, lo que devu
 | `scripts\iniciar-qdrant.ps1` | Arranca Qdrant escuchando solo en esta PC, con su carpeta de datos fija y sin telemetría |
 | `scripts\crear-base.ps1` | Corre `sql\base.sql` en la base de `Conexiones:SqlTextos` |
 | `scripts\crear-origen-de-prueba.ps1` | Arma una base como la de origen, con los PDF de una carpeta, para probar la importación |
-| `scripts\controlar-docs.ps1` | Controla que la documentación coincida con el código |
 
-**Te pueden preguntar:**
+**Preguntas frecuentes:**
 
 - *¿Por qué el arranque está en un script y no en el programa?* Para que el programa sea el mismo en una PC y en varios servidores. Lo que cambia entre un lugar y otro queda afuera del código.
 
@@ -341,9 +340,9 @@ No hay código nuevo para esto. Es la misma API, leyendo otras diez líneas.
 2. `conexiones.oficina.ejemplo.json` es el modelo: las diez líneas de `Conexiones` con nombres en mayúsculas para reemplazar.
 3. [`oficina.md`](oficina.md) es la guía: qué preparar en cada servidor, cómo comprobarlo desde la PC del RAG y qué hacer si algo falla.
 
-**Te pueden preguntar:**
+**Preguntas frecuentes:**
 
-- *¿Qué cambia entre tu PC y la oficina?* Un archivo de configuración. `git diff fase-9-local fase-10-oficina --stat` muestra que no cambió ningún archivo de código.
+- *¿Qué cambia entre tu PC y la oficina?* Un archivo de configuración. El código es el mismo.
 - *¿Dónde quedan las claves?* En `conexiones.json`, en la PC donde corre la API. Git lo ignora. Con un usuario de Windows para SQL Server no hay ninguna clave escrita.
 - *¿Por qué `scripts\iniciar.ps1` no arranca Qdrant en la oficina?* Porque mira la dirección: si no es de esta PC, no es suyo arrancarlo.
 - *¿Qué es lo primero que falla al pasar a varios servidores?* La red: SQL Server Express trae TCP/IP apagado, Ollama escucha solo en su propia PC, y siempre hay un firewall. Por eso la guía comprueba cada puerto antes de abrir la página.
@@ -366,13 +365,11 @@ No hay código nuevo para esto. Es la misma API, leyendo otras diez líneas.
 
 ## 8. Lo que no hace
 
-Conviene decirlo antes de que lo pregunten:
-
 - **No lee PDF escaneados.** Quedan como `sin texto`. Leerlos pide OCR, que es otro paso.
 - **No tiene usuarios ni permisos.** La API escucha solo en la PC donde corre. Para abrirla a una red hay que agregar eso primero.
 - **Procesa un documento por vez.** La velocidad la pone el modelo de embeddings: entre 6 y 13 fragmentos por segundo en la PC de prueba.
 - **No se probó con decenas de miles de documentos.** Se probó con 13 PDF. El diseño lo contempla (anota de a 1.000, tiene índices por estado, tope de intentos, borra de a 20.000), pero la primera carga grande es la prueba real.
-- **No mide la calidad de las respuestas con números.** Hasta la fase 8 había un examen automático; se sacó porque no hay preguntas escritas para los documentos reales. Sigue en la branch `fase-8-validaciones`.
+- **No mide la calidad de las respuestas con números.** No hay preguntas escritas para los documentos reales contra las que medir.
 - **No responde lo que no está en los documentos.** Eso es a propósito.
 
 ## 9. Cómo comprobar que entendiste

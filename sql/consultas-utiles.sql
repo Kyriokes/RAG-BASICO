@@ -1,5 +1,5 @@
 -- consultas-utiles.sql: consultas para mirar la base desde SSMS.
--- No crea nada y scripts\crear-base.ps1 no la corre. Antes de usarla, elegí la base del RAG (en casa, RagBasico_F9).
+-- No crea nada y scripts\crear-base.ps1 no la corre. Antes de usarla, elegí la base del RAG (en casa, RagBasico).
 
 -- Cuántos documentos hay en cada estado: pendiente, listo, sin texto o error.
 SELECT Estado, COUNT(*) AS Documentos FROM rag.Documento GROUP BY Estado;

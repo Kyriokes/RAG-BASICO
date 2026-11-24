@@ -1,4 +1,4 @@
-# Pedidos de prueba de la fase 10.
+# Pedidos de prueba.
 # En Visual Studio, o en VS Code con la extensión REST Client: "Send Request" arriba de cada pedido.
 # Las páginas están en la raíz: {{host}} para preguntar y {{host}}/documentos.html para cargar.
 @host = http://127.0.0.1:5090
