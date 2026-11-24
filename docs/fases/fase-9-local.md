@@ -106,7 +106,8 @@ Para actualizar una base ya creada, a la que le faltan las columnas de la págin
 | Actualizar una base ya creada | Con la base sin las columnas, `GET /salud` dio error en SQL Server y dijo qué correr; con las columnas, quedó bien. `scripts\crear-base.ps1` dos veces seguidas sobre `RagBasico_F9`: 19.191 fragmentos, ninguno perdido | A mano, con la API andando | 23/11/2026 |
 | El pedido del PDF | 200 con `application/pdf` e `inline`; un nombre de archivo con caracteres raros; 404 para uno que no existe; 405 con otro método | Pedidos con `curl` contra la API | 23/11/2026 |
 | Las fuentes en la página | Con una pregunta: los enlaces, el rango de páginas, las no citadas atenuadas y el tema oscuro | A mano, en el navegador | 23/11/2026 |
-| Lo que no se probó | El clic abriendo el visor del navegador en la página: hay que mirarlo en Edge o en Chrome. "Reprocesar todo" sobre los 16 documentos de `RagBasico_F9` | Pendiente | 23/11/2026 |
+| "Reprocesar todo" con la base ya cargada | Los 16 documentos de `RagBasico_F9` quedaron listos en 49 minutos: 19.191 fragmentos, todos con página, con los mismos textos que antes, y 19.191 puntos en Qdrant. 9.360 fragmentos cruzan de página | Una huella de los textos de cada documento, tomada antes y después, y consultas a la base y a Qdrant | 23/11/2026 |
+| El clic en una fuente | Abre el PDF en otra pestaña, con el visor del navegador | A mano, en el navegador | 23/11/2026 |
 
 Versiones: .NET 10.0.15, Qdrant 1.20.2, `qwen3.5:4b` y `qwen3-embedding:0.6b`. Commit medido: el último de `fase-9-local`.
 
@@ -153,4 +154,4 @@ Versiones: .NET 10.0.15, Qdrant 1.20.2, `qwen3.5:4b` y `qwen3-embedding:0.6b`. C
 - Si un documento se reemplaza, una respuesta vieja que quedó en pantalla abre el PDF nuevo en la página vieja.
 - El PDF se lee entero de SQL en cada clic.
 - Los documentos cargados antes de que se guardara la página no la dicen hasta apretar "Reprocesar todo".
-- No se probó el clic abriendo el visor en la página, ni "Reprocesar todo" sobre los 16 documentos de `RagBasico_F9`.
+- "Reprocesar todo" tardó 49 minutos con 19.191 fragmentos: con más documentos, son horas sin poder preguntar por los que faltan.

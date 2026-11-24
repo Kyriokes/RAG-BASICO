@@ -423,7 +423,7 @@ Y los límites de las fuentes con página:
 - **Un importado puede tardar en abrir.** Con la base de origen lenta, hasta 300 segundos.
 - **Una respuesta vieja puede abrir un PDF nuevo.** Si un documento se reemplaza mientras hay una respuesta en pantalla, sus enlaces abren el PDF nuevo en la página del viejo.
 - **El PDF se lee entero de SQL en cada clic.** No se guarda una copia, ni en la API ni en el navegador.
-- **No se probó el clic contra un visor.** Se probó el pedido y los enlaces que arma la página. Que el visor salte a la página hay que mirarlo en Edge o Chrome. Tampoco se probó "Reprocesar todo" sobre la base entera.
+- **Ponerle la página a lo ya cargado lleva tiempo.** "Reprocesar todo" rehace todos los vectores: en la PC de prueba, 19.191 fragmentos tardaron 49 minutos, y mientras dura no se encuentran los documentos que faltan.
 
 ## 9. Cómo comprobar que entendiste
 
