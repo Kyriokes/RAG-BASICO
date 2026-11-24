@@ -129,6 +129,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1
 
 Crea la base `RagBasico` (la de `Conexiones:SqlTextos`, en `RagBasico.Api\appsettings.json`) con sus tres tablas y el índice Full-Text. Se puede correr de nuevo sin romper nada.
 
+El mismo script actualiza una base que ya existe. Si a `rag.Fragmento` le faltan las columnas de la página (`Pagina` y `PaginaFin`), se las agrega, sin tocar lo cargado. La franja lo avisa: SQL Server en rojo, con el texto `le faltan las columnas de la página`. Los pasos:
+
+1. Frená la API: Ctrl+C en la ventana de `iniciar.cmd`.
+2. Corré `scripts\crear-base.ps1`, con el comando de arriba. Toma el servidor y la base de `RagBasico.Api\appsettings.json`, no de `conexiones.json`. Si la base está en otro servidor, se corre `sql\base.sql` desde SSMS, con un usuario que pueda cambiar tablas: [oficina.md](oficina.md).
+3. Arrancá la API con `iniciar.cmd`.
+4. En la página "Documentos", apretá "Reprocesar todo". Un fragmento guardado sin página tiene `Pagina` en `NULL`, y su fuente no dice la página, hasta que se reprocesa.
+
+"Reprocesar todo" borra todos los fragmentos y la colección de Qdrant, y rehace todo desde los PDF. Mientras dura, las preguntas no encuentran los documentos que faltan. Como medida: 19.191 fragmentos tardaron 49 minutos en una PC con una GTX 1070.
+
 Los PDF no van en ninguna carpeta especial: se arrastran a la página "Documentos" y quedan guardados en la base. Tienen que tener texto seleccionable: los escaneados no se pueden leer, y quedan como `sin texto`.
 
 ## 8. Qdrant
@@ -178,6 +187,10 @@ Al terminar: Ctrl+C en la ventana de `iniciar.cmd`, y cerrar la ventana de Qdran
 | `scripts\crear-base.ps1` falla en `base.sql` con el error 7609, "Full-Text Search is not installed" | SQL Server se instaló sin Full-Text: agregalo (punto 5) |
 | El instalador de SQL Server termina con un error en "Database Engine Services": `Wait on the Database Engine recovery handle failed` | Puede ser el disco: con algunos NVMe, Windows 11 informa sectores de más de 4 KB, y ninguna versión de SQL Server arranca así. Para verlo, en una consola como administrador: `fsutil fsinfo sectorinfo C:`. Si `PhysicalBytesPerSectorForAtomicity` o `PhysicalBytesPerSectorForPerformance` dan más de 4096, seguí el arreglo de Microsoft, una clave del registro y reiniciar: https://learn.microsoft.com/troubleshoot/sql/database-engine/database-file-operations/troubleshoot-os-4kb-disk-sector-size. Después, desinstalá lo que quedó de SQL Server y volvé a instalarlo (punto 5) |
 | La franja muestra SQL Server en rojo | El texto de abajo dice qué pasa. `No se pudo conectar`: el servicio de SQL Server está detenido, aunque el mensaje de SQL hable del nombre de la instancia y de las conexiones remotas (`error: 26`): arrancalo (punto 9). `No se pudo abrir la base` o `faltan las tablas`: creala con `scripts\crear-base.ps1` (punto 7) |
+| La franja o `/salud` dicen que a la tabla `rag.Fragmento` le faltan las columnas de la página, o "Reprocesar todo" da ese error y no borra nada | La base no tiene las columnas `Pagina` y `PaginaFin`. Frená la API, corré `scripts\crear-base.ps1`, que las agrega sin tocar lo cargado, arrancá de nuevo y apretá "Reprocesar todo" (punto 7) |
+| Una fuente no dice la página: muestra solo el archivo y el número de fragmento | Es un fragmento guardado sin página, y el enlace abre el PDF desde el principio. En "Documentos", "Reprocesar todo" (punto 7). Para ver qué documentos tienen fragmentos sin página, hay una consulta en `sql\consultas-utiles.sql` |
+| El clic en una fuente descarga el PDF en vez de abrirlo | El navegador está configurado para descargar los PDF, y así no va a la página. Cambialo en su configuración: en Chrome y en Edge, en la configuración del sitio, "Documentos PDF"; en Firefox, en "Aplicaciones", "Formato de documento portátil (PDF)", "Abrir en Firefox" |
+| El clic en una fuente abre una pestaña con un texto en JSON | El PDF no se pudo leer, y el texto dice por qué: el documento se borró, o es un importado y la base de origen no responde |
 | Un PDF queda en `error` | La lista de "Documentos" muestra el motivo debajo del nombre: no es un PDF, está roto o tiene clave. Arreglado el motivo, "Reintentar los que fallaron" lo vuelve a procesar |
 | Un PDF queda en `sin texto` | Es un escaneo: no tiene texto seleccionable. No se puede cargar |
 | Los documentos quedan en `pendiente` y no avanzan | La página "Documentos" muestra en rojo `La carga de documentos está frenada` y el motivo, que también sale en la consola de la API: un servidor no responde, y la franja muestra cuál, o Ollama no tiene el modelo (`ollama pull` con el nombre que dice el mensaje) o el modelo da vectores de otro tamaño (`Conexiones:ModeloEmbeddings`). Corregido, sigue sola. Un PDF muy grande también tarda: se procesa a unos 6 a 13 fragmentos por segundo |

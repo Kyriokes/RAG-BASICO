@@ -38,7 +38,7 @@ Y recibe:
 ```json
 {
   "texto": "Hay que presentar el formulario y la factura original [1].",
-  "fuentes": [ { "numero": 1, "archivo": "reintegros.pdf", "fragmentoId": 1520 } ],
+  "fuentes": [ { "numero": 1, "documentoId": 37, "archivo": "reintegros.pdf", "pagina": 3, "paginaFin": 4, "fragmentoId": 1520 } ],
   "msBusqueda": 180,
   "msModelo": 4200
 }
@@ -46,9 +46,36 @@ Y recibe:
 
 `texto` es la respuesta, con las citas entre corchetes. `fuentes` dice de qué archivo salió cada cita. La respuesta trae además cuánto tardó cada parte.
 
+Cada fuente trae tres datos para llegar al PDF:
+
+| Campo | Qué es |
+|---|---|
+| `documentoId` | El número del documento. Con él se pide el PDF |
+| `pagina` | La página del PDF donde empieza el fragmento, contada desde 1: la que muestra el visor, no la impresa en la hoja. `null` en un fragmento guardado sin página |
+| `paginaFin` | La página donde termina, solo si termina en otra. Si no, `null` |
+
+`GET /buscar?q=...` devuelve los fragmentos sin redactar una respuesta, con los mismos tres campos y el texto:
+
+```json
+[ { "fragmentoId": 1520, "documentoId": 37, "archivo": "reintegros.pdf", "pagina": 3, "paginaFin": 4, "texto": "Documento: reintegros\n..." } ]
+```
+
 Si el pedido no es válido, la API responde 400. Si falta un servidor, 503. En los dos casos el cuerpo es un JSON con `title` y `detail`, que dicen qué pasó.
 
 Todos los pedidos, con un ejemplo de cada uno, están en `RagBasico.Api\RagBasico.Api.http`.
+
+### Abrir el PDF de una fuente
+
+El PDF se pide con `GET /documentos/{id}/pdf`, con el `documentoId` de la fuente: `http://127.0.0.1:5090/documentos/37/pdf`. La API lo lee de SQL y lo devuelve como `application/pdf`, para mostrar en el visor y no para descargar.
+
+La página no va en el pedido: se agrega del lado del navegador, con `#page=N` al final de la dirección. Para la fuente del ejemplo, `http://127.0.0.1:5090/documentos/37/pdf#page=3`. Si `pagina` es `null`, la dirección va sin `#page`. Desde un sistema de escritorio alcanza con abrir esa dirección en el navegador.
+
+A tener en cuenta:
+
+- **Los errores.** Si el documento no existe, si no tiene PDF o si lo guardado no es un PDF, responde 404. Si la base de origen no responde, 502 o 503. El cuerpo es el mismo JSON con `title` y `detail`: en una pestaña del navegador se ve como texto.
+- **La espera.** El PDF se lee entero de SQL en cada pedido. Uno importado, con la base de origen lenta, puede tardar hasta 300 segundos.
+- **Dónde abre.** En la página donde empieza el fragmento, que a veces es la anterior a la de la parte principal, porque cada fragmento repite 50 palabras del anterior. Si el navegador está configurado para descargar los PDF, lo descarga y no va a la página.
+- **Un documento reemplazado.** Una fuente que quedó en pantalla abre el PDF que hay guardado, en la página del anterior.
 
 ### Desde VB.NET
 
@@ -111,6 +138,6 @@ No está hecho. Estos son los lugares que hay que tocar:
 1. **Separar las clases de la API.** Hoy todo está en un proyecto web, `RagBasico.Api`. Los archivos `.cs`, menos `Program.cs`, se mueven a un proyecto de biblioteca de clases, con los mismos tres paquetes: Dapper, Microsoft.Data.SqlClient y PdfPig.
 2. **Registrar las clases en la otra aplicación.** Son las líneas de `Program.cs` que van desde `AddHttpClient<Ollama>` hasta `AddHostedService<Procesador>`. Se copian tal cual.
 3. **Darle la configuración.** Las clases leen cuatro bloques: `Conexiones`, `Rag`, `Ollama` y `Qdrant`. Se copian de `appsettings.json` a la configuración de la otra aplicación.
-4. **Llamar a las clases.** Para preguntar, `Redactor.ResponderAsync(pregunta, modo, ct)`, que devuelve lo mismo que `POST /preguntar`. Para cargar, `Documentos.AnotarSubidosAsync(archivos, ct)`. El `Procesador` procesa solo lo que quede pendiente.
+4. **Llamar a las clases.** Para preguntar, `Redactor.ResponderAsync(pregunta, modo, ct)`, que devuelve lo mismo que `POST /preguntar`. Para el PDF de una fuente, `Documentos.LeerPdfAsync(documentoId, ct)`, que devuelve el nombre del archivo y sus bytes. Para cargar, `Documentos.AnotarSubidosAsync(archivos, ct)`. El `Procesador` procesa solo lo que quede pendiente.
 
 Lo que se pierde por este camino son las dos páginas y la franja de estado, que son de `RagBasico.Api`. El chequeo que las alimenta, `Salud.RevisarAsync`, sigue disponible.

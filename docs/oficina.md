@@ -44,7 +44,7 @@ Lo hace quien administra ese servidor.
 6. **Elegir cómo entra la API.** Dos maneras:
    - **Con un usuario de SQL.** Hace falta el modo mixto: en SSMS, clic derecho en el servidor, "Propiedades", "Seguridad", "Modo de autenticación de Windows y SQL Server", y reiniciar el servicio. Después, crear el usuario (punto 8).
    - **Con el usuario de Windows** de quien corre la API, si la PC y el servidor están en el mismo dominio. No hay clave en ningún archivo.
-7. **Crear la base.** En SSMS, abrir `sql\base.sql`, activar el menú "Consulta" → "Modo SQLCMD" ("Query" → "SQLCMD Mode"), agregar como primera línea `:setvar Base RagBasico` y ejecutar. Crea la base `RagBasico` con sus tablas y el índice Full-Text. Se puede correr de nuevo sin romper nada.
+7. **Crear la base.** En SSMS, abrir `sql\base.sql`, activar el menú "Consulta" → "Modo SQLCMD" ("Query" → "SQLCMD Mode"), agregar como primera línea `:setvar Base RagBasico` y ejecutar. Crea la base `RagBasico` con sus tablas y el índice Full-Text. Se puede correr de nuevo sin romper nada: sobre una base que ya existe, la actualiza. Si a `rag.Fragmento` le faltan las columnas de la página, las agrega, sin tocar lo cargado.
 8. **Darle permiso al usuario.** En SSMS, sobre la base nueva (cambiá `USUARIO` y `CLAVE`; con usuario de Windows, la primera línea es `CREATE LOGIN [DOMINIO\usuario] FROM WINDOWS;` y la segunda `CREATE USER [DOMINIO\usuario] FOR LOGIN [DOMINIO\usuario];`):
 
    ```sql
@@ -292,6 +292,7 @@ Lo que ocupa: en Qdrant, cada fragmento son unos 4 KB de memoria, así que un mi
 | SQL Server en rojo: `Login failed for user` | El usuario o la clave están mal, o el servidor no está en modo mixto (punto 6 del SQL Server) |
 | SQL Server en rojo: `No se pudo abrir la base` | La base no existe o el usuario no tiene permiso: puntos 7 y 8 del SQL Server |
 | SQL Server en rojo: `faltan las tablas del RAG` | La base existe pero no se corrió `sql\base.sql` en ella, o se corrió en otra |
+| SQL Server en rojo: `le faltan las columnas de la página` | La base existe, pero sin las dos columnas donde se guarda la página de cada fragmento. Frenar la API y correr `sql\base.sql` en SSMS, como en el punto 7 del SQL Server: agrega las columnas sin tocar lo cargado. Lo corre quien administra el servidor, porque el usuario de la API solo lee y escribe: no puede cambiar tablas. Después, arrancar la API y, en "Documentos", "Reprocesar todo", para que los fragmentos guardados sin página la tengan. Con muchos documentos tarda horas, y mientras dura las preguntas no encuentran los que faltan. Sin las columnas, "Reprocesar todo" no borra nada y avisa lo mismo |
 | Full-Text en rojo | Ese SQL Server se instaló sin Full-Text: punto 1 del SQL Server |
 | Al cargar un documento, un error de permisos (`permission was denied`) | Al usuario le falta `db_datawriter`: punto 8 del SQL Server |
 | Modelos de Ollama en rojo: `Ollama no responde en http://SERVIDOR-IA:11434` | Ollama está cerrado, o escucha solo en su PC: falta `OLLAMA_HOST` y reiniciarlo (punto 4), o falta abrir el firewall |

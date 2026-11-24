@@ -36,6 +36,8 @@ Una sola vez, desde la carpeta del repo, se crea la base:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\crear-base.ps1
 ```
 
+El mismo script actualiza una base que ya existe y no tiene las columnas de la página, sin tocar lo cargado: se corre con la API frenada y después, en la página "Documentos", se aprieta "Reprocesar todo". El detalle: punto 7 de [docs/instalacion.md](docs/instalacion.md).
+
 Después, cada vez: **doble clic en `iniciar.cmd`**. Arranca Qdrant si corre en esta PC y no está andando, arranca la API y abre el navegador en `http://127.0.0.1:5090/`. Se frena con Ctrl+C en esa ventana.
 
 SQL Server y Ollama tienen que estar andando. Si falta alguno, la página lo dice.
@@ -44,7 +46,7 @@ SQL Server y Ollama tienen que estar andando. Si falta alguno, la página lo dic
 
 Hay dos páginas:
 
-- **Preguntar** (`/`): se escribe la pregunta y se recibe la respuesta, con sus fuentes.
+- **Preguntar** (`/`): se escribe la pregunta y se recibe la respuesta, con sus fuentes. Cada fuente dice el archivo y la página, y con un clic abre el PDF en otra pestaña, en esa página.
 - **Documentos** (`/documentos.html`): se arrastran los PDF, se ve cuántos están listos y cuántos faltan, y se borran o se vuelven a procesar.
 
 Arriba de las dos hay una franja con un punto por cada pieza: verde si anda, amarillo si anda a medias y rojo si no anda, con lo que hay que hacer.
@@ -61,10 +63,10 @@ En `RagBasico.Api\`:
 |---|---|
 | `Program.cs` | El arranque: registra las clases y define los pedidos que acepta la API |
 | `appsettings.json` | La configuración. El bloque `Conexiones` tiene todo lo que conecta con otro servidor |
-| `Documentos.cs` | Anota los PDF que se suben o se importan, lleva el estado de cada uno, los lista y los borra |
+| `Documentos.cs` | Anota los PDF que se suben o se importan, lleva el estado de cada uno, los lista y los borra. También lee de SQL el PDF de un documento, para el pedido que lo abre (`GET /documentos/{id}/pdf`) |
 | `Procesador.cs` | El trabajo en segundo plano: toma los documentos pendientes, de a uno |
-| `Cargador.cs` | Procesa un documento: le saca el texto, lo corta, calcula los vectores y los sube a Qdrant |
-| `Chunker.cs` | Corta un texto en fragmentos, respetando los párrafos |
+| `Cargador.cs` | Procesa un documento: le saca el texto, lo corta, guarda cada fragmento con su página, calcula los vectores y los sube a Qdrant |
+| `Chunker.cs` | Corta el texto en fragmentos, respetando los párrafos. Recibe una página del PDF por elemento y dice en qué página empieza y en cuál termina cada fragmento |
 | `Buscador.cs` | Busca los fragmentos que sirven para una pregunta: por palabras, por significado o con las dos mezcladas |
 | `Rrf.cs` | Mezcla los resultados de las dos búsquedas |
 | `Redactor.cs` | Le pasa la pregunta y los fragmentos al modelo, y devuelve la respuesta con sus fuentes |
@@ -84,9 +86,9 @@ En el resto del repo:
 | `iniciar.cmd` | El doble clic: corre `scripts\iniciar.ps1` |
 | `scripts\iniciar.ps1` | Arranca Qdrant, si corre en esta PC, y después la API |
 | `scripts\iniciar-qdrant.ps1` | Arranca Qdrant escuchando solo en esta PC |
-| `scripts\crear-base.ps1` | Crea la base: corre `sql\base.sql` |
+| `scripts\crear-base.ps1` | Crea la base, o actualiza una que ya existe: corre `sql\base.sql` |
 | `scripts\crear-origen-de-prueba.ps1` | Arma una base con PDF adentro, para probar la importación |
-| `sql\base.sql` | Las tablas y el índice Full-Text |
+| `sql\base.sql` | Las tablas y el índice Full-Text. `rag.Fragmento` guarda la página de cada fragmento en `Pagina` y `PaginaFin`; a una base que ya existe sin esas dos columnas, se las agrega |
 | `sql\consultas-utiles.sql` | Consultas para mirar la base desde SSMS |
 | `conexiones.oficina.ejemplo.json` | El modelo para conectar la API a otros servidores |
 
