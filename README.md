@@ -47,7 +47,7 @@ SQL Server y Ollama tienen que estar andando. Si falta alguno, la página lo dic
 Hay dos páginas:
 
 - **Preguntar** (`/`): se escribe la pregunta y se recibe la respuesta, con sus fuentes. Cada fuente dice el archivo y la página, y con un clic abre el PDF en otra pestaña, en esa página.
-- **Documentos** (`/documentos.html`): se arrastran los PDF, se ve cuántos están listos y cuántos faltan, y se borran o se vuelven a procesar.
+- **Documentos** (`/documentos.html`): se arrastran los PDF, se ve cuántos están listos y cuántos faltan, y se borran o se vuelven a procesar. Mientras se cargan, tres barras muestran cuánto va de la subida, cuántos documentos se procesaron y por dónde va el que se está procesando.
 
 Arriba de las dos hay una franja con un punto por cada pieza: verde si anda, amarillo si anda a medias y rojo si no anda, con lo que hay que hacer.
 
@@ -65,7 +65,7 @@ En `RagBasico.Api\`:
 | `appsettings.json` | La configuración. El bloque `Conexiones` tiene todo lo que conecta con otro servidor |
 | `Documentos.cs` | Anota los PDF que se suben o se importan, lleva el estado de cada uno, los lista y los borra. También lee de SQL el PDF de un documento, para el pedido que lo abre (`GET /documentos/{id}/pdf`) |
 | `Procesador.cs` | El trabajo en segundo plano: toma los documentos pendientes, de a uno |
-| `Cargador.cs` | Procesa un documento: le saca el texto, lo corta, guarda cada fragmento con su página, calcula los vectores y los sube a Qdrant |
+| `Cargador.cs` | Procesa un documento: le saca el texto, lo corta, guarda cada fragmento con su página, calcula los vectores y los sube a Qdrant. Mientras tanto anota por dónde va, para la barra de la página "Documentos" |
 | `Chunker.cs` | Corta el texto en fragmentos, respetando los párrafos. Recibe una página del PDF por elemento y dice en qué página empieza y en cuál termina cada fragmento |
 | `Buscador.cs` | Busca los fragmentos que sirven para una pregunta: por palabras, por significado o con las dos mezcladas |
 | `Rrf.cs` | Mezcla los resultados de las dos búsquedas |
