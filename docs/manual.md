@@ -107,14 +107,20 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 
 ### `RagBasico.Api\wwwroot\documentos.html`
 
-**Qué hace:** la página de carga. HTML, CSS y JavaScript a mano, sin librerías. Tiene la zona para soltar archivos, el botón de importar, los cinco números del avance y la lista.
+**Qué hace:** la página de carga. HTML, CSS y JavaScript a mano, sin librerías. Tiene la zona para soltar archivos, el botón de importar, los cinco números del avance, tres barras y la lista.
 
-**Orden de lectura del JavaScript:** `pedir` (habla con la API y muestra el error si lo hay), `subir` (arma un formulario con los archivos y lo manda a `POST /documentos`), `actualizar` (pide `GET /documentos` cada 5 segundos si hay pendientes, cada 30 si no) y `dibujar`.
+Las tres barras: la de la subida ("Subiendo 3 archivos: 45 %"), la del total ("Documentos: 16 de 17 procesados") y la del documento que se está procesando ("Procesando archivo.pdf: 224 de 351 fragmentos (calculando los vectores)"). Están para que un PDF enorme no parezca colgado: un digesto de 9.900 fragmentos tarda unos 20 minutos.
+
+**Orden de lectura del JavaScript:** `pedir` (habla con la API y muestra el error si lo hay), `subir` (arma un formulario con los archivos y lo manda a `POST /documentos`), `enviarConAvance` (el pedido de la subida, que va avisando cuánto lleva enviado), `actualizar` (pide `GET /documentos` cada 2 segundos si se está procesando un documento, cada 5 si solo hay pendientes, cada 30 si no), `dibujar` y `dibujarBarras`.
 
 **Te pueden preguntar:**
 
 - *¿Por qué `textContent` y no `innerHTML`?* Porque el nombre de un archivo lo elige quien lo sube. Con `innerHTML`, un nombre con etiquetas se ejecutaría como parte de la página.
 - *¿La página procesa algo?* No. Solo manda los archivos y mira el estado. Se puede cerrar y la carga sigue.
+- *¿Por qué la subida usa `XMLHttpRequest` y el resto `fetch`?* Porque `fetch` no informa cuánto lleva enviado, y `XMLHttpRequest` sí: avisa con el evento `progress` de `upload`. Es el único pedido de la página que lo necesita. `enviarConAvance` lo envuelve en una promesa, así `subir` lo espera con `await` igual que a los demás.
+- *¿Con qué se dibujan las barras?* Con `<progress>`, un elemento del navegador. Con `value` y `max` muestra una proporción. Sin `value`, se mueve sola sin porcentaje: es lo que se ve mientras se lee el PDF.
+- *¿Qué mide la barra de la subida?* El envío de los archivos a la API. Cuando llega a 100, la API todavía tiene que guardarlos en SQL: por eso el texto cambia a "Guardando...". Ese tramo es corto y no tiene porcentaje.
+- *¿Por qué pregunta cada 2 segundos mientras hay un documento en curso?* Para que la barra se vea avanzar. `GET /documentos` es barato: unas cuentas en SQL y un dato en memoria. Sin documento en curso vuelve a 5 o a 30 segundos.
 
 ### `RagBasico.Api\Documentos.cs`
 
@@ -191,6 +197,8 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
    4. Lo corta (`Chunker.PartirPaginas`) y guarda los fragmentos en SQL (`GuardarFragmentosAsync`), cada uno con la página donde empieza y, si cruza a otra, la página donde termina.
    5. De a 16 fragmentos, pide los vectores a Ollama y los sube a Qdrant.
    6. Lo marca `listo`, si sigue siendo el mismo PDF.
+
+   En los pasos 3, 4 y 5 va dejando en `_enCurso` por dónde va. Arriba de todo está la propiedad `EnCurso`, que es la que lee `GET /documentos`.
 3. El `catch` del final: decide de quién fue la culpa. De un servidor (`EsDeUnServidor`): queda pendiente y se espera. No se sabe (`EsPasajero`): se reintenta hasta tres veces. Del documento: se borran los vectores que llegó a subir y queda en `error`.
 4. `SacarTexto`, `EsEscaneado`, `RevisarTexto`: las tres funciones sueltas.
 
@@ -205,6 +213,10 @@ Y el índice Full-Text sobre `rag.Fragmento.Texto`, en español, que es lo que h
 - *¿Por qué cada fragmento empieza con `Documento: <nombre>`?* Para que la búsqueda también lo encuentre por el nombre del documento.
 - *¿Por qué al `Chunker` se le pasa una lista de páginas y no el texto entero?* Porque la página no está escrita en el texto: es la posición en la lista. `SacarTexto` devuelve un texto por página, en orden, y una página en blanco también ocupa su lugar. Si se uniera todo antes de cortar, ese dato se perdería.
 - *¿Por qué `PaginaFin` se guarda en `NULL` si el `Chunker` siempre la devuelve?* El `Chunker` devuelve las dos páginas, iguales si el fragmento no cruza. En la tabla se guarda la de fin solo cuando es otra. Así, en SSMS y en la página, "tiene página de fin" quiere decir "cruza de página".
+- *¿Por qué el avance del documento en curso está en memoria y no en la base?* Porque no hace falta que sobreviva. Si se apaga la API, ese documento se procesa de nuevo desde el principio: saber que iba por el fragmento 224 no sirve para nada. Guardarlo sería un `UPDATE` cada 16 fragmentos, solo para dibujar una barra. Lo que sí importa, el estado de cada documento, sigue en la tabla.
+- *¿Por qué `EnCurso` es `static` y su campo es `volatile`?* `static`, por lo mismo que `Procesador.Aviso`: lo escribe el `Cargador` del trabajo en segundo plano y lo lee `GET /documentos`, que no tiene ese `Cargador` a mano. `volatile`, porque son dos hilos: le dice a .NET que el que lee tiene que ver siempre lo último que se escribió. Y como `AvanceDeCarga` es un `record` que se arma entero cada vez, el que lee nunca ve uno a medio cambiar.
+- *¿Por qué "leyendo el PDF" no tiene porcentaje?* PdfPig no avisa por qué página va: devuelve todo junto al terminar. Y hasta cortar el texto no se sabe cuántos fragmentos son. Por eso los primeros pasos van con `Total` en 0 y la página muestra una barra que se mueve sin número. El porcentaje aparece en el paso largo, el de los vectores.
+- *¿Quién limpia `EnCurso` si el documento falla?* El `finally` de `ProcesarSiguienteAsync`: termine bien o mal, queda en `null`. Así la página nunca muestra como "en curso" un documento que ya no se está procesando.
 - *¿Con qué se lee el PDF?* Con PdfPig, una librería de código abierto. Es el único paquete, junto con Dapper y el cliente de SQL Server.
 
 ### `RagBasico.Api\Chunker.cs`
@@ -348,7 +360,7 @@ Son cortos y se leen juntos, en este orden:
 
 ### `RagBasico.Api\Modelos.cs`
 
-Los tipos de datos que van y vienen: lo que se manda a `/preguntar`, lo que devuelve, un fragmento recién cortado (`Parte`), un fragmento encontrado (`Fragmento`), una fuente (`Fuente`), un PDF para abrir (`PdfGuardado`), un documento de la lista. Cada uno es un `record` de una línea. No tiene lógica.
+Los tipos de datos que van y vienen: lo que se manda a `/preguntar`, lo que devuelve, un fragmento recién cortado (`Parte`), un fragmento encontrado (`Fragmento`), una fuente (`Fuente`), un PDF para abrir (`PdfGuardado`), un documento de la lista, por dónde va el que se está procesando (`AvanceDeCarga`). Cada uno es un `record` de una línea. No tiene lógica.
 
 ### `RagBasico.Api\wwwroot\estado.js` y `estilos.css`
 
@@ -380,7 +392,7 @@ Los tipos de datos que van y vienen: lo que se manda a `/preguntar`, lo que devu
 | La página la pone la API, no el modelo | Sale de la tabla: no se puede inventar |
 | Los importados no se copian | Ya están guardados en la otra base |
 | El segundo plano | Una carga grande tarda horas y no puede depender de una página abierta |
-| El estado en la tabla | Se puede apagar en cualquier momento y sigue después. No hay nada en memoria que se pierda |
+| El estado en la tabla | Se puede apagar en cualquier momento y sigue después. En memoria queda solo lo que es para mostrar: el aviso de carga frenada y el avance del documento en curso |
 | La API arranca siempre | Es más útil que diga qué falta a que no arranque |
 | Sin Qdrant no hay híbrida | Mejor un error claro que una respuesta peor sin aviso |
 | Sin librerías en las páginas | Son tres archivos que se leen enteros; no hay nada que instalar ni actualizar |
@@ -409,6 +421,13 @@ Y los límites de las fuentes con página:
 - **Una respuesta vieja puede abrir un PDF nuevo.** Si un documento se reemplaza mientras hay una respuesta en pantalla, sus enlaces abren el PDF nuevo en la página del viejo.
 - **El PDF se lee entero de SQL en cada clic.** No se guarda una copia, ni en la API ni en el navegador.
 - **Ponerle la página a lo ya cargado lleva tiempo.** "Reprocesar todo" rehace todos los vectores: en la PC de prueba, 19.191 fragmentos tardaron 49 minutos, y mientras dura no se encuentran los documentos que faltan.
+
+Y los límites de las barras de carga:
+
+- **El avance del documento en curso se pierde al reiniciar.** Está en memoria. Al volver a arrancar, ese documento empieza de nuevo y la barra también.
+- **"Leyendo el PDF" no tiene porcentaje.** PdfPig no avisa por qué página va: la barra se mueve, pero no dice cuánto falta.
+- **La barra de la subida mide el envío, no el guardado.** Llega a 100 cuando la API recibió los archivos. Guardarlos en SQL viene después, es corto y se ve como "Guardando...".
+- **En una PC, la barra de la subida casi no se ve.** Con archivos chicos el envío es instantáneo. Se nota con archivos grandes o con la API en otra máquina.
 
 ## 8. Cómo comprobar que entendiste
 

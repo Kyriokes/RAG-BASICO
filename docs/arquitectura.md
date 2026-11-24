@@ -79,7 +79,9 @@ Los chequeos corren todos a la vez, así un servidor caído no demora a los dem�
     - **Un servidor** (Ollama, Qdrant o la base de origen no responden, Qdrant contesta con un error, como una clave mal puesta, Ollama está mal configurado, porque el modelo no está bajado o da vectores de otro tamaño, o falla SQL Server): el documento sigue `pendiente`, sin fragmentos a medias y sin gastar un intento, y se reintenta cada 30 segundos. La página muestra el motivo.
     - **No se sabe** (Ollama contestó con otro error, o una consulta tardó demasiado): se reintenta, y al tercer intento queda en `error`.
 
-Como el estado está en la tabla, la API se puede apagar en cualquier momento: al volver sigue donde quedó.
+Mientras procesa, el `Cargador` anota por dónde va en `Cargador.EnCurso`: el archivo, el paso y dos cantidades. En el paso 5 dice "trayendo el PDF", en el 6, "leyendo el PDF", y en el 7, "cortando el texto", con las cantidades en 0, porque todavía no se sabe cuántos fragmentos son y PdfPig no avisa por qué página va. En el paso 8 dice "calculando los vectores", con cuántos fragmentos ya tienen su vector y cuántos son, después de cada lote. Cuando el documento termina, bien o mal, queda en `null`. Ese dato está en memoria, no en SQL: sirve solo para que la página muestre una barra.
+
+Como el estado está en la tabla, la API se puede apagar en cualquier momento: al volver sigue donde quedó. El documento que estaba a medias se procesa de nuevo desde el principio.
 
 **Cortar por párrafos (`Chunker.PartirPaginas`):**
 
@@ -93,7 +95,7 @@ El corte es el mismo que da unir las páginas con una línea en blanco y cortar 
 
 **Mirar, abrir, borrar y rehacer:**
 
-- `GET /documentos` devuelve cuántos documentos hay en cada estado, cuántos fragmentos, cuántos documentos por minuto se procesaron en los últimos 10 minutos, lo que falta, una página de 50 documentos, de todos o de un estado, y, si la carga está frenada, el aviso con el motivo.
+- `GET /documentos` devuelve cuántos documentos hay en cada estado, cuántos fragmentos, cuántos documentos por minuto se procesaron en los últimos 10 minutos, lo que falta, una página de 50 documentos, de todos o de un estado, y, si la carga está frenada, el aviso con el motivo. También devuelve `enCurso`: por dónde va el documento que se está procesando, o `null` si no hay ninguno. Los números salen de la base; el aviso y `enCurso` los completa el endpoint, de `Procesador.Aviso` y de `Cargador.EnCurso`, que están en memoria.
 - `GET /documentos/{id:int}/pdf` devuelve el PDF de un documento, en cualquier estado, para el visor del navegador. `Documentos.LeerPdfAsync` lo lee de SQL: de `rag.Documento.Contenido` si se arrastró, de la base de origen si se importó. Sale como `application/pdf` con tres encabezados: `Content-Disposition: inline` con el nombre del archivo, `X-Content-Type-Options: nosniff` y `Cache-Control: no-store`. Si no existe el documento, si no está el PDF o si lo guardado no es un PDF, 404. Si falla la base de origen, 502 o 503.
 - `DELETE /documentos/{id}` borra los puntos de Qdrant del documento y después su fila; los fragmentos se van en cascada.
 - `POST /documentos/reintentar` pasa los que quedaron en `error` a `pendiente`.
@@ -128,7 +130,10 @@ Se mezclan puestos y no puntajes porque el `RANK` del Full-Text y la distancia c
 **Las páginas:**
 
 - `index.html`: manda la pregunta y el modo a `POST /preguntar`, y muestra la respuesta, las fuentes (las citadas con `[n]` en texto normal, las otras atenuadas) y lo que tardó cada parte. Cada fuente es un enlace a `/documentos/ID/pdf#page=N`, que abre el PDF en otra pestaña, en la página donde empieza el fragmento. Dice "archivo, página 3 (fragmento 41)"; si el fragmento cruza de página, "archivo, páginas 3 a 4 (fragmento 41)"; y si no tiene página guardada, "archivo (fragmento 41)", y el enlace abre el PDF desde el principio. La parte `#page=N` no llega a la API: la usa el visor.
-- `documentos.html`: la zona para soltar PDF, el botón de importar (prendido solo si `GET /info` dice que hay base de origen), los números del avance y la lista. Se actualiza sola: cada 5 segundos si hay pendientes, cada 30 si no.
+- `documentos.html`: la zona para soltar PDF, el botón de importar (prendido solo si `GET /info` dice que hay base de origen), los números del avance y la lista. Se actualiza sola: cada 2 segundos si se está procesando un documento, cada 5 si solo hay pendientes, cada 30 si no. Tiene tres barras, hechas con el elemento `<progress>` del navegador:
+  - la de la subida, mientras se mandan los archivos: "Subiendo 3 archivos: 45 %" y después "Guardando 3 archivos en la base...". Ese pedido se hace con `XMLHttpRequest` y no con `fetch`, porque `fetch` no informa cuánto lleva enviado;
+  - la del total, mientras haya pendientes: "Documentos: 16 de 17 procesados";
+  - la del documento en curso: "Procesando archivo.pdf: 224 de 351 fragmentos (calculando los vectores)". Mientras se lee el PDF y se corta el texto todavía no hay cantidades: la barra se mueve sin porcentaje y dice el paso.
 - `estado.js` dibuja la franja de estado de las dos, y `estilos.css` tiene lo común.
 
 ## 3. Tablas

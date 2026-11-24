@@ -36,7 +36,7 @@ Después, cada vez: **doble clic en `iniciar.cmd`**. Arranca Qdrant si no está 
 Hay dos páginas:
 
 - **Preguntar** (`/`): la pregunta, el modo de búsqueda y la respuesta con sus fuentes. Cada fuente dice el archivo y la página, y con un clic abre el PDF en otra pestaña, en esa página.
-- **Documentos** (`/documentos.html`): se arrastran los PDF, se ve cuántos están listos y cuántos faltan, y se borran o se vuelven a procesar.
+- **Documentos** (`/documentos.html`): se arrastran los PDF, se ve cuántos están listos y cuántos faltan, y se borran o se vuelven a procesar. Mientras se cargan, unas barras muestran cuánto va de la subida, cuántos documentos se procesaron y por dónde va el que se está procesando.
 
 Arriba de las dos hay una franja con un punto por cada pieza (SQL Server, Full-Text, los modelos, Qdrant): verde si anda, amarillo si anda a medias y rojo si no anda, con lo que hay que hacer.
 
