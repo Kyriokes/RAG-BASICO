@@ -2,6 +2,8 @@
 
 Cómo pasar de "todo en una PC" a "cada pieza en su servidor". El código es el mismo: lo único que cambia es un archivo, `RagBasico.Api\conexiones.json`.
 
+Ese archivo no viene en el repo: se crea en el punto 6, copiando `conexiones.oficina.ejemplo.json`, que está en la carpeta principal. Los puntos 2 a 5 dicen qué línea le corresponde a cada servidor: anotalas, y en el punto 6 las escribís.
+
 Seguí los puntos en orden. Cada uno termina con un comando para comprobarlo: no pases al siguiente hasta que ande.
 
 Los nombres en mayúsculas (`SERVIDOR-SQL`, `SERVIDOR-QDRANT`, `SERVIDOR-IA`, `SERVIDOR-VIEJO`, `USUARIO`, `CLAVE`) son de ejemplo: reemplazalos por los reales. Los comandos son para Windows PowerShell.
